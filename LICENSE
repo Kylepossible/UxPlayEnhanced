@@ -1,0 +1,11 @@
+GNU LESSER GENERAL PUBLIC LICENSE
+Version 2.1, February 1999
+
+This project includes modifications to UxPlay, which is licensed under
+the GNU Lesser General Public License v2.1.
+
+The embedded mDNS responder (dnssd_embedded.c) and launcher scripts are
+also distributed under the same license.
+
+See: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+See also: lib/uxplay/LICENSE for the full UxPlay license text.
