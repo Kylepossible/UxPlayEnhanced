@@ -10,5 +10,5 @@ Write-Host "Starting UxPlay debug mode..."
 Write-Host "Connect from your iPhone/iPad, reproduce the issue, then close this window."
 Write-Host "The log will be saved to $logPath"
 
-& $exePath -n $env:COMPUTERNAME -nh -d -vsync -h265 2>&1 |
+& $exePath -n $env:COMPUTERNAME -nh -vs 0 -d 2>&1 |
     Tee-Object -FilePath $logPath

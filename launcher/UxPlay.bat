@@ -1,9 +1,9 @@
 @echo off
 :: UxPlay AirPlay Receiver - No Bonjour Required (Embedded mDNS)
-:: Mirrors your iPhone/iPad screen to this PC
+:: Receives iPhone/iPad audio without starting the local video renderer
 cd /d "%~dp0"
 set GST_PLUGIN_PATH=%~dp0lib\gstreamer-1.0
 set PATH=%~dp0;%PATH%
 
 :: Uses your computer's hostname as the AirPlay name
-start /min "" uxplay.exe -n "%COMPUTERNAME%" -nh -vsync -h265
+start /min "" uxplay.exe -n "%COMPUTERNAME%" -nh -vs 0

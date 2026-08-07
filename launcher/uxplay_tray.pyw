@@ -27,8 +27,8 @@ UXPLAY_ARGS = [
     UXPLAY_EXE,
     "-n", AIRPLAY_NAME,
     "-nh",
-    "-vsync",
-    "-h265",
+    "-vs",
+    "0",
 ]
 
 process = None

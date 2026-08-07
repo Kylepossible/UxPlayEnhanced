@@ -90,12 +90,19 @@ Key options:
 |------|-------------|
 | `-n name` | Name shown on Apple devices (default: hostname) |
 | `-nh` | Don't append hostname suffix to the name |
+| `-vs 0` | Audio-only mode; disables the local video renderer |
 | `-h265` | Enable H.265/4K video support |
 | `-vsync` | Sync audio to video (recommended) |
 | `-pin` | Require a PIN code for connections |
 | `-d` | Debug output |
 
 Run `uxplay.exe --help` for all options.
+
+The included `UxPlay.bat`, tray launcher, and debug launcher default to
+audio-only mode. This avoids starting the local video decode/render pipeline,
+reducing CPU/GPU use and video-related timing pressure. Use the raw command
+line with a video sink such as `-vs autovideosink` when screen mirroring is
+wanted.
 
 ### Audio Format Logging
 
