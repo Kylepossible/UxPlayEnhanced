@@ -93,12 +93,53 @@ static void txt_record_deallocate(txt_record_t *rec)
     rec->capacity = 0;
 }
 
+/**
+ * Locate the entry for key. Returns the offset of its length byte, or -1.
+ * Keys are compared exactly; every caller passes an internal lowercase literal.
+ */
+static int txt_record_find(const txt_record_t *rec, const char *key,
+                           uint16_t *entry_len_out)
+{
+    uint16_t key_len = (uint16_t)strlen(key);
+    uint16_t pos = 0;
+
+    while (pos < rec->len) {
+        uint8_t entry_len = rec->data[pos];
+        if (entry_len == 0 || pos + 1 + entry_len > rec->len) break;
+        if (entry_len > key_len && rec->data[pos + 1 + key_len] == '=' &&
+            memcmp(rec->data + pos + 1, key, key_len) == 0) {
+            if (entry_len_out) *entry_len_out = entry_len;
+            return (int)pos;
+        }
+        pos = (uint16_t)(pos + 1 + entry_len);
+    }
+    return -1;
+}
+
 static int txt_record_set_value(txt_record_t *rec, const char *key,
                                 uint8_t value_size, const void *value)
 {
     /* TXT record entry format: [len_byte] key=value */
     uint16_t key_len = (uint16_t)strlen(key);
     uint16_t entry_len = key_len + 1 + value_size; /* key + '=' + value */
+
+    /* The length prefix is one byte, so an entry cannot exceed 255. */
+    if (entry_len > 255) return -1;
+
+    /* Bonjour's TXTRecordSetValue() replaces the value when the key is already
+     * present. Appending a second entry instead would leave duplicate keys in
+     * the record, which RFC 6763 6.4 says clients resolve by taking the first
+     * occurrence -- so the embedded responder would advertise a different value
+     * than the Bonjour build for any key set more than once. */
+    uint16_t existing_len = 0;
+    int existing = txt_record_find(rec, key, &existing_len);
+    if (existing >= 0) {
+        uint16_t removed = (uint16_t)(1 + existing_len);
+        memmove(rec->data + existing, rec->data + existing + removed,
+                (size_t)(rec->len - existing - removed));
+        rec->len = (uint16_t)(rec->len - removed);
+    }
+
     uint16_t needed = rec->len + 1 + entry_len;    /* +1 for length byte */
 
     if (needed > rec->capacity) {
