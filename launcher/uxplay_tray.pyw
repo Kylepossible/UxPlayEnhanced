@@ -33,9 +33,18 @@ def resource_path(*parts):
 SCRIPT_DIR = application_dir()
 UXPLAY_EXE = os.path.join(SCRIPT_DIR, "uxplay.exe")
 GST_PLUGIN_PATH = os.path.join(SCRIPT_DIR, "lib", "gstreamer-1.0")
-LOG_PATH = os.path.join(SCRIPT_DIR, "UxPlayEnhanced.log")
+USER_DATA_DIR = os.environ.get("UXPLAYENHANCED_DATA_DIR")
+if not USER_DATA_DIR:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        USER_DATA_DIR = os.path.join(local_app_data, "UxPlayEnhanced")
+    else:
+        USER_DATA_DIR = os.path.join(os.path.expanduser("~"), "UxPlayEnhanced")
+LOG_DIR = os.path.join(USER_DATA_DIR, "Logs")
+LOG_PATH = os.path.join(LOG_DIR, "UxPlayEnhanced.log")
 ICON_PATH = resource_path("assets", "UxPlayEnhanced-icon.png")
 AIRPLAY_NAME = socket.gethostname()
+VERBOSE_LOGGING = "--verbose" in sys.argv[1:]
 
 UXPLAY_ARGS = [
     UXPLAY_EXE,
@@ -43,6 +52,8 @@ UXPLAY_ARGS = [
     "-nh",
     "-vs", "0",
 ]
+if not VERBOSE_LOGGING:
+    UXPLAY_ARGS.append("-no-progress")
 
 process = None
 log_file = None
@@ -131,6 +142,26 @@ def current_song(text):
     return song[:110]
 
 
+def current_client(text):
+    pattern = re.compile(
+        r"connection request from\s+(.+?)\s+\(([^)]+)\)\s+with deviceID",
+        re.IGNORECASE,
+    )
+    matches = pattern.findall(text)
+    if not matches:
+        return "Waiting for connection"
+    name, model = matches[-1]
+    return f"{name.strip()} ({model.strip()})"[:110]
+
+
+def host_text(item=None):
+    return f"AirPlay Host: {AIRPLAY_NAME}"
+
+
+def client_text(item=None):
+    return "AirPlay Client: " + current_client(read_log_tail())
+
+
 def status_text(item=None):
     with state_lock:
         running = process is not None and process.poll() is None
@@ -152,8 +183,26 @@ def song_text(item=None):
 def quality_text(item=None):
     line = latest_line(read_log_tail(), "audio quality:")
     if not line:
-        return "Audio: Waiting for audio"
-    return ("Audio: " + line.split("audio quality:", 1)[-1].strip())[:130]
+        return "Codec: Waiting for audio"
+
+    match = re.search(
+        r"codec=([^;\s]+)(?:\s+\([^)]*\))?;\s*"
+        r"quality=([^;]+);\s*resolution=(\d+)-bit/(\d+)\s*Hz;\s*"
+        r"channels=(\d+)",
+        line,
+        re.IGNORECASE,
+    )
+    if not match:
+        return "Codec: Audio format available in logs"
+
+    codec, quality, bit_depth, sample_rate, channels = match.groups()
+    sample_rate_khz = int(sample_rate) / 1000
+    sample_rate_text = f"{sample_rate_khz:g} kHz"
+    return (
+        f"Codec: {codec} | Quality: {quality.strip()} | "
+        f"Bit/Sample Rate: {bit_depth}-bit / {sample_rate_text} | "
+        f"Channels: {channels}"
+    )[:160]
 
 
 def start_uxplay():
@@ -161,7 +210,7 @@ def start_uxplay():
     global process, log_file
 
     stop_uxplay()
-    os.makedirs(SCRIPT_DIR, exist_ok=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
     log_file = open(LOG_PATH, "a", encoding="utf-8", errors="replace", buffering=1)
     log_file.write(
         "\n=== UxPlayEnhanced tray session "
@@ -223,10 +272,18 @@ def on_restart(icon, item):
 
 
 def on_view_logs(icon, item):
-    if not os.path.exists(LOG_PATH):
-        with open(LOG_PATH, "a", encoding="utf-8"):
-            pass
-    os.startfile(LOG_PATH)
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        if log_file:
+            log_file.flush()
+        if not os.path.exists(LOG_PATH):
+            with open(LOG_PATH, "a", encoding="utf-8"):
+                pass
+        # Opening through Notepad is deterministic even when Windows has no
+        # file association registered for the .log extension.
+        subprocess.Popen(["notepad.exe", LOG_PATH])
+    except OSError as error:
+        icon.notify(f"Could not open the log: {error}", "UxPlayEnhanced")
 
 
 def on_open_folder(icon, item):
@@ -254,9 +311,8 @@ def main():
         create_icon_image(),
         f"UxPlayEnhanced Audio Receiver ({AIRPLAY_NAME})",
         menu=pystray.Menu(
-            pystray.MenuItem(
-                f"AirPlay: {AIRPLAY_NAME}", None, enabled=False
-            ),
+            pystray.MenuItem(host_text, None, enabled=False),
+            pystray.MenuItem(client_text, None, enabled=False),
             pystray.MenuItem(status_text, None, enabled=False),
             pystray.MenuItem(song_text, None, enabled=False),
             pystray.MenuItem(quality_text, None, enabled=False),

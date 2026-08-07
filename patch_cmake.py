@@ -149,6 +149,43 @@ if "if (!metadata_text.empty() && metadata_text != last_audio_metadata_text)" no
         raise RuntimeError("Could not find UxPlay metadata log insertion point")
     uxplay_content = uxplay_content.replace(old_metadata_log, new_metadata_log, 1)
 
+# 5. Let the tray launcher suppress the once-per-second progress display in
+# normal logs while retaining it as an opt-in troubleshooting mode.
+if "static bool show_audio_progress" not in uxplay_content:
+    old_progress_global = "static bool monitor_progress = false;\n"
+    new_progress_global = old_progress_global + "static bool show_audio_progress = true;\n"
+    if old_progress_global not in uxplay_content:
+        raise RuntimeError("Could not find UxPlay progress global insertion point")
+    uxplay_content = uxplay_content.replace(old_progress_global, new_progress_global, 1)
+
+if "if (!show_audio_progress)" not in uxplay_content:
+    old_display_progress = "static void display_progress(uint32_t start, uint32_t curr, uint32_t end) {\n"
+    new_display_progress = old_display_progress + "    if (!show_audio_progress) return;\n"
+    if old_display_progress not in uxplay_content:
+        raise RuntimeError("Could not find UxPlay progress display insertion point")
+    uxplay_content = uxplay_content.replace(old_display_progress, new_display_progress, 1)
+
+if 'printf("-no-progress' not in uxplay_content:
+    old_progress_help = '    printf("-nohold   Drop current connection when new client connects.\\n");\n'
+    new_progress_help = (
+        old_progress_help
+        + '    printf("-no-progress Suppress the once-per-second audio progress display.\\n");\n'
+    )
+    if old_progress_help not in uxplay_content:
+        raise RuntimeError("Could not find UxPlay progress help insertion point")
+    uxplay_content = uxplay_content.replace(old_progress_help, new_progress_help, 1)
+
+if 'arg == "-no-progress"' not in uxplay_content:
+    old_progress_option = '        } else if (arg == "-nohold") {\n            nohold = 1;\n'
+    new_progress_option = (
+        '        } else if (arg == "-no-progress") {\n'
+        '            show_audio_progress = false;\n'
+        + old_progress_option
+    )
+    if old_progress_option not in uxplay_content:
+        raise RuntimeError("Could not find UxPlay progress option insertion point")
+    uxplay_content = uxplay_content.replace(old_progress_option, new_progress_option, 1)
+
 with open(uxplay_path, "w") as f:
     f.write(uxplay_content)
 

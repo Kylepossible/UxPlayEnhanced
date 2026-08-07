@@ -41,26 +41,38 @@ UxPlay's audio stack.
 6. Open the AirPlay output selector on the iPhone, iPad, or Mac and choose the
    Windows computer's name.
 
-The setup installs to `C:\Program Files\UxPlayEnhanced`, creates the inbound
-TCP and UDP firewall rules used by AirPlay, adds desktop and Start-menu
+The setup installs to `C:\Program Files\UxPlayEnhanced`, unblocks files that
+inherited Windows' downloaded-file marker, creates and verifies program-scoped
+inbound TCP and UDP firewall rules used by AirPlay, adds desktop and Start-menu
 shortcuts, and registers an uninstall entry in Windows Apps and Features.
 
 ### Portable Use
 
-Installation is optional. Extract the ZIP, run `setup-firewall.ps1` once as
-Administrator, then launch `UxPlayEnhanced.bat`. The portable launcher also starts in
-audio-only mode and uses the tray application when available.
+Installation is optional. Extract the ZIP and run `setup-firewall.ps1` once; it
+requests administrator access automatically. Then launch `UxPlayEnhanced.bat`.
+The portable launcher also starts in audio-only mode and uses the tray
+application when available.
 
 ## Tray Application
 
 The bundled `UxPlayEnhanced.exe` runs UxPlay without an open terminal window.
 Right-click its blue tray icon to see:
 
-- Receiver and connection status
+- AirPlay host, connected client device, and connection status
 - Current artist, song, and album metadata
-- Audio codec and receiver quality
+- Clean codec, lossless/lossy quality, bit depth, sample rate, and channels
 - View logs and open the installation folder
 - Restart and quit controls
+
+Logs are stored at
+`%LOCALAPPDATA%\UxPlayEnhanced\Logs\UxPlayEnhanced.log`. **View logs** opens
+that file directly in Notepad, without relying on a Windows `.log` file
+association.
+
+Normal logs omit the once-per-second track progress display. Launch
+`UxPlayEnhanced.exe --verbose` when troubleshooting to include those progress
+updates; connection, format, metadata, warning, and error events are always
+logged.
 
 The executable bundles its Python runtime and tray dependencies. End users do
 not need Python, `pip`, `pystray`, or Pillow installed.
