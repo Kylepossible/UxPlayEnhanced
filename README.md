@@ -97,6 +97,17 @@ Key options:
 
 Run `uxplay.exe --help` for all options.
 
+### Audio Format Logging
+
+When an AirPlay audio session starts, UxPlay logs the codec, lossless/lossy
+classification, receiver resolution, channel count, and equivalent decoded
+PCM bitrate. `ALAC` (`ct=2`) is lossless; `AAC-ELD` (`ct=8`) is lossy. The
+current Windows receiver profile is fixed at 16-bit/44.1 kHz, so the log does
+not claim to measure an encoded ALAC bitrate or Hi-Res Lossless source rate.
+Repeated unchanged DMAP metadata updates are suppressed in the console; a
+metadata block is printed again only when its contents change or a new audio
+session starts.
+
 ## Firewall Setup
 
 Windows Firewall blocks incoming connections by default. Run `setup-firewall.ps1` as Administrator once to create allow rules for `uxplay.exe` (TCP + UDP inbound).
@@ -126,7 +137,7 @@ The embedded responder (`lib/uxplay/lib/dnssd_embedded.c`) implements:
 
 ### CMake Integration
 
-The `USE_EMBEDDED_MDNS` CMake option (default OFF in upstream, ON in this project) swaps `dnssd.c` for `dnssd_embedded.c` and skips all Bonjour/Avahi SDK detection. No other source files are modified.
+The `USE_EMBEDDED_MDNS` CMake option (default OFF in upstream, ON in this project) swaps `dnssd.c` for `dnssd_embedded.c` and skips all Bonjour/Avahi SDK detection. The build-time patch also adds the audio-quality log and suppresses repeated unchanged metadata blocks in `uxplay.cpp`.
 
 ## Credits
 
