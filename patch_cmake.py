@@ -23,6 +23,13 @@ new_aux = """option(USE_EMBEDDED_MDNS "Use embedded mDNS responder instead of Bo
 aux_source_directory(. play_src)
 set(DIR_SRCS ${play_src})
 
+# build.sh copies dnssd_embedded.c into this directory, so aux_source_directory()
+# globs it whether or not the embedded responder was requested. Always drop it
+# from the glob and add it back only when it is selected: otherwise a build with
+# USE_EMBEDDED_MDNS=OFF compiles it alongside dnssd.c and fails to link on
+# duplicate definitions of the dnssd_* API.
+list(REMOVE_ITEM DIR_SRCS ./dnssd_embedded.c)
+
 if(USE_EMBEDDED_MDNS)
   # Swap dnssd.c for the embedded mDNS implementation
   list(REMOVE_ITEM DIR_SRCS ./dnssd.c)
