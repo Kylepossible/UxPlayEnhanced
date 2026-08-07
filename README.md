@@ -144,6 +144,14 @@ embedded responder in `src/dnssd_embedded.c`. It:
 - Sends startup announcements and TTL=0 goodbye records
 - Runs in-process without `dnssd.dll`, iTunes, iCloud, or Bonjour services
 
+Discovery is advertised on every up, non-loopback IPv4 interface rather than
+only the one that routes toward the internet, so a PC on both Ethernet and
+Wi-Fi is reachable from either network and a machine with no default route
+still works. Each interface advertises its own address. The interface list is
+rechecked every 15 seconds, so joining Wi-Fi, docking, or raising a VPN is
+picked up without a restart, and services are re-announced on links that
+appear.
+
 ## Build from Source
 
 Clone this repository with its official UxPlay submodule:
