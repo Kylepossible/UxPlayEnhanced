@@ -13,7 +13,7 @@ if (-not (Test-IsAdministrator)) {
 }
 
 $installDir = Split-Path -Parent $PSCommandPath
-$desktopShortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "UxPlayEnhanced.lnk"
+$desktopShortcut = Join-Path ([Environment]::GetFolderPath("CommonDesktopDirectory")) "UxPlayEnhanced.lnk"
 $startMenuShortcut = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\UxPlayEnhanced.lnk"
 
 Get-Process UxPlayEnhanced, UxPlayTray, uxplay -ErrorAction SilentlyContinue |

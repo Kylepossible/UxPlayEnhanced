@@ -17,7 +17,7 @@ $sourceDir = Split-Path -Parent $PSCommandPath
 $installDir = Join-Path $env:ProgramFiles "UxPlayEnhanced"
 $trayPath = Join-Path $installDir "UxPlayEnhanced.exe"
 $uxplayPath = Join-Path $installDir "uxplay.exe"
-$desktopDir = [Environment]::GetFolderPath("Desktop")
+$desktopDir = [Environment]::GetFolderPath("CommonDesktopDirectory")
 $startMenuDir = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs"
 $firewallGroup = "UxPlayEnhanced"
 $excludedFiles = @(
@@ -109,12 +109,22 @@ foreach ($expected in @(
 
 $shell = New-Object -ComObject WScript.Shell
 
-$desktopShortcut = $shell.CreateShortcut((Join-Path $desktopDir "UxPlayEnhanced.lnk"))
+$desktopShortcutPath = Join-Path $desktopDir "UxPlayEnhanced.lnk"
+$desktopShortcut = $shell.CreateShortcut($desktopShortcutPath)
 $desktopShortcut.TargetPath = $trayPath
 $desktopShortcut.WorkingDirectory = $installDir
 $desktopShortcut.IconLocation = "$trayPath,0"
 $desktopShortcut.Description = "UxPlayEnhanced AirPlay audio receiver"
 $desktopShortcut.Save()
+
+if (-not (Test-Path -LiteralPath $desktopShortcutPath -PathType Leaf)) {
+    throw "Desktop shortcut was not created at $desktopShortcutPath."
+}
+$verifiedDesktopShortcut = $shell.CreateShortcut($desktopShortcutPath)
+if ([System.IO.Path]::GetFullPath($verifiedDesktopShortcut.TargetPath) -ine
+    [System.IO.Path]::GetFullPath($trayPath)) {
+    throw "Desktop shortcut verification failed: target is $($verifiedDesktopShortcut.TargetPath)."
+}
 
 New-Item -ItemType Directory -Path $startMenuDir -Force | Out-Null
 $startMenuShortcut = $shell.CreateShortcut((Join-Path $startMenuDir "UxPlayEnhanced.lnk"))
@@ -127,13 +137,13 @@ $startMenuShortcut.Save()
 $uninstallKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\UxPlayEnhanced"
 New-Item -Path $uninstallKey -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name DisplayName -Value "UxPlayEnhanced" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value "1.0.1" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value "1.0.2" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name Publisher -Value "Kylepossible" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name InstallLocation -Value $installDir -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name UninstallString -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$installDir\UxPlayEnhanced-Uninstall.ps1`"" -PropertyType String -Force | Out-Null
 
 Write-Host "UxPlayEnhanced installed to $installDir" -ForegroundColor Green
-Write-Host "Desktop shortcut created: $desktopDir\UxPlayEnhanced.lnk" -ForegroundColor Green
+Write-Host "Desktop shortcut created and verified: $desktopShortcutPath" -ForegroundColor Green
 Write-Host "Firewall rules created and verified for AirPlay TCP and UDP." -ForegroundColor Green
 Write-Host ""
 Write-Host "You can now launch UxPlayEnhanced from the desktop." -ForegroundColor Cyan

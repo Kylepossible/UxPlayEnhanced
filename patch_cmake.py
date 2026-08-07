@@ -1,6 +1,7 @@
 """
 Patches the UxPlay submodule for embedded mDNS, readable audio-quality logs,
-and de-duplicated audio metadata output.
+de-duplicated audio metadata output, smooth ALAC startup, and high-quality
+Windows audio resampling.
 Run this after cloning the submodule: python patch_cmake.py
 """
 
@@ -9,6 +10,8 @@ import os
 
 cmake_path = os.path.join("lib", "uxplay", "lib", "CMakeLists.txt")
 uxplay_path = os.path.join("lib", "uxplay", "uxplay.cpp")
+raop_rtp_path = os.path.join("lib", "uxplay", "lib", "raop_rtp.c")
+audio_renderer_path = os.path.join("lib", "uxplay", "renderers", "audio_renderer.c")
 
 with open(cmake_path, "r") as f:
     content = f.read()
@@ -186,7 +189,68 @@ if 'arg == "-no-progress"' not in uxplay_content:
         raise RuntimeError("Could not find UxPlay progress option insertion point")
     uxplay_content = uxplay_content.replace(old_progress_option, new_progress_option, 1)
 
+# 6. Avoid accumulating ALAC frames until the first NTP sync packet and then
+# burst-draining them into GStreamer. Anchor the clock to the first real ALAC
+# payload and let the existing resend/reorder buffer drain at packet cadence.
+# This is a narrowed backport of FDH2/UxPlay PR #548: malformed short packets
+# are excluded explicitly, and the resampler change is evaluated separately.
+if "Reset the stream-local clock mapping" not in uxplay_content:
+    old_clock_reset = "    audio_type = type;\n    \n    if (use_audio) {\n"
+    new_clock_reset = """    audio_type = type;
+    /* Reset the stream-local clock mapping before the first frame. */
+    remote_clock_offset = 0;
+
+    if (use_audio) {
+"""
+    if old_clock_reset not in uxplay_content:
+        raise RuntimeError("Could not find UxPlay stream clock reset insertion point")
+    uxplay_content = uxplay_content.replace(old_clock_reset, new_clock_reset, 1)
+
 with open(uxplay_path, "w") as f:
     f.write(uxplay_content)
+
+with open(raop_rtp_path, "r") as f:
+    raop_rtp_content = f.read()
+
+if "Start ALAC playback from the first real audio packet" not in raop_rtp_content:
+    old_alac_enqueue = """            if (raop_rtp->ct == 2 && packetlen == 44)  continue;   /* ignore the ALAC packets with format information only. */
+
+            int result = raop_buffer_enqueue(raop_rtp->buffer, packet, packetlen, 1);
+"""
+    new_alac_enqueue = """            if (raop_rtp->ct == 2 && packetlen == 44)  continue;   /* ignore the ALAC packets with format information only. */
+
+            if (!raop_rtp->initial_sync && raop_rtp->ct == 2 && packetlen > 44) {
+                /* Start ALAC playback from the first real audio packet instead
+                 * of burst-draining frames accumulated before the first NTP sync. */
+                raop_rtp->client_ntp_sync = raop_ntp_get_local_time();
+                raop_rtp->rtp_sync = byteutils_get_int_be(packet, 4);
+                raop_rtp->initial_sync = true;
+            }
+
+            int result = raop_buffer_enqueue(raop_rtp->buffer, packet, packetlen, 1);
+"""
+    if old_alac_enqueue not in raop_rtp_content:
+        raise RuntimeError("Could not find UxPlay ALAC enqueue insertion point")
+    raop_rtp_content = raop_rtp_content.replace(old_alac_enqueue, new_alac_enqueue, 1)
+
+with open(raop_rtp_path, "w") as f:
+    f.write(raop_rtp_content)
+
+# 7. Windows commonly converts the 44.1 kHz AirPlay stream to a 48 kHz output
+# device. GStreamer's quality 10 adds about 2.18 ms of resampler latency and
+# roughly doubles this stage's CPU cost versus the default quality 4, but the
+# measured real-time cost remained about 0.22% of one core on the build PC.
+with open(audio_renderer_path, "r") as f:
+    audio_renderer_content = f.read()
+
+if "audioresample quality=10 !" not in audio_renderer_content:
+    old_resampler = '        g_string_append (launch, "audioresample ! ");    /* wasapisink must resample from 44.1 kHz to 48 kHz */\n'
+    new_resampler = '        g_string_append (launch, "audioresample quality=10 ! ");    /* high-quality 44.1 kHz to 48 kHz conversion */\n'
+    if old_resampler not in audio_renderer_content:
+        raise RuntimeError("Could not find UxPlay audio resampler insertion point")
+    audio_renderer_content = audio_renderer_content.replace(old_resampler, new_resampler, 1)
+
+with open(audio_renderer_path, "w") as f:
+    f.write(audio_renderer_content)
 
 print(f"Patched {cmake_path}")

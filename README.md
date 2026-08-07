@@ -24,6 +24,8 @@ no local video renderer, no always-open terminal, and no external mDNS service.
 | Installation | Self-elevating setup creates firewall rules and shortcuts |
 | Audio information | Logs codec, lossless/lossy classification, and receiver format |
 | Console noise | Suppresses repeated unchanged metadata blocks |
+| ALAC startup | Begins dequeuing on the first real audio packet to avoid a startup burst |
+| Windows resampling | Uses GStreamer's maximum quality for 44.1 to 48 kHz conversion |
 
 “Lightweight” refers to runtime behavior: the normal launcher does not create a
 video decode/render pipeline and does not require a separate Bonjour service.
@@ -45,6 +47,13 @@ The setup installs to `C:\Program Files\UxPlayEnhanced`, unblocks files that
 inherited Windows' downloaded-file marker, creates and verifies program-scoped
 inbound TCP and UDP firewall rules used by AirPlay, adds desktop and Start-menu
 shortcuts, and registers an uninstall entry in Windows Apps and Features.
+
+The desktop shortcut is created in the Windows all-users Desktop so it remains
+visible when setup is approved with a different administrator account. Setup
+verifies that the shortcut targets the installed copy before reporting success.
+The installer does not delete the extracted release folder; its setup files are
+intentionally not copied into Program Files. After a successful installation,
+the extracted folder can be deleted manually.
 
 ### Portable Use
 
@@ -96,6 +105,26 @@ The current receiver profile is 16-bit/44.1 kHz. The log therefore reports the
 format received and decoded by UxPlay; it does not claim to measure the source
 service's encoded bitrate or prove that an Apple Music source was Hi-Res
 Lossless. Repeated identical DMAP metadata updates are omitted from the console.
+
+In Apple Music terms, UxPlayEnhanced's 16-bit/44.1 kHz receiver profile is
+standard **Lossless** (CD quality), not **Hi-Res Lossless**; see
+[Apple's lossless-audio guide](https://support.apple.com/guide/iphone/play-lossless-audio-iph14e213417/26/ios/26).
+This is also the useful compatibility default for iOS 27 Developer Beta 3:
+[current beta user reports](https://www.reddit.com/r/iOS27/comments/1uwsphr/apple_music_automix_on_ios_27_public_beta/)
+indicate AutoMix works with Lossless selected but is unavailable with Hi-Res
+Lossless. Apple does not list that restriction in the
+[Beta 3 release notes](https://developer.apple.com/documentation/ios-ipados-release-notes/ios-ipados-27-release-notes),
+so it should be treated as beta behavior that may change.
+
+ALAC playback starts from the first real audio payload instead of accumulating
+frames until the first NTP synchronization packet and then burst-draining them.
+This is a narrowed backport of
+[FDH2/UxPlay PR #548](https://github.com/FDH2/UxPlay/pull/548); malformed short
+packets are excluded explicitly. The PR's separate `audioresample quality=10`
+change was evaluated independently: it added approximately 2.18 ms of filter
+latency and increased this isolated stage from about 0.11% to 0.22% of one CPU
+core on the build PC. UxPlayEnhanced includes it because the absolute overhead
+is small and audio quality is the project's priority.
 
 ## Bonjour-Free Discovery
 
