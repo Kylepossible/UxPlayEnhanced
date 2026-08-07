@@ -11,15 +11,31 @@
 
 set -e
 
+# Make the script work from either the MSYS2 MinGW64 shell or a plain MSYS2
+# shell launched by a Windows shortcut.
+export PATH="/mingw64/bin:/usr/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
 DIST_DIR="$SCRIPT_DIR/dist/UxPlay"
+
+if [ -f /mingw64/bin/python.exe ]; then
+    BUILD_PYTHON="/mingw64/bin/python.exe"
+elif [ -f /c/Python311/python.exe ]; then
+    BUILD_PYTHON="/c/Python311/python.exe"
+else
+    BUILD_PYTHON="$(command -v python || command -v python.exe || true)"
+fi
+if [ -z "$BUILD_PYTHON" ]; then
+    echo "ERROR: Python is required to apply the source patch"
+    exit 1
+fi
 
 echo "=== Copying embedded mDNS source ==="
 cp "$SCRIPT_DIR/src/dnssd_embedded.c" "$SCRIPT_DIR/lib/uxplay/lib/dnssd_embedded.c"
 
 echo "=== Patching CMakeLists.txt for embedded mDNS ==="
-python "$SCRIPT_DIR/patch_cmake.py"
+"$BUILD_PYTHON" "$SCRIPT_DIR/patch_cmake.py"
 
 echo "=== Configuring build ==="
 mkdir -p "$BUILD_DIR"
@@ -86,8 +102,31 @@ done
 # Resolve all transitive DLL dependencies
 copy_deps
 
-# Copy launcher files
-cp "$SCRIPT_DIR/launcher/"* "$DIST_DIR/"
+# Build the standalone tray launcher. This uses the regular Windows Python
+# installation, not MSYS2's build Python. The resulting executable bundles
+# pystray and Pillow so users do not need Python or pip-installed packages.
+TRAY_PYTHON="/c/Python311/python.exe"
+if [ ! -f "$TRAY_PYTHON" ]; then
+    TRAY_PYTHON="$(command -v python.exe || true)"
+fi
+if [ -n "$TRAY_PYTHON" ] && "$TRAY_PYTHON" -m PyInstaller --version >/dev/null 2>&1; then
+    echo "=== Building standalone tray launcher ==="
+    "$TRAY_PYTHON" -m PyInstaller --noconfirm --clean --onefile --noconsole \
+        --name UxPlayTray \
+        --distpath "$BUILD_DIR/tray-dist" \
+        --workpath "$BUILD_DIR/tray-work" \
+        --specpath "$BUILD_DIR/tray-spec" \
+        "$SCRIPT_DIR/launcher/uxplay_tray.pyw"
+    cp "$BUILD_DIR/tray-dist/UxPlayTray.exe" "$DIST_DIR/"
+else
+    echo "WARNING: Windows Python with PyInstaller was not found; UxPlayTray.exe was not built"
+fi
+
+# Copy launcher files, skipping source-checkout cache directories.
+for launcher_file in "$SCRIPT_DIR"/launcher/*; do
+    [ -f "$launcher_file" ] || continue
+    cp "$launcher_file" "$DIST_DIR/"
+done
 
 echo ""
 echo "=== Build complete ==="
@@ -96,4 +135,4 @@ echo "Files: $(find "$DIST_DIR" -name '*.dll' | wc -l) DLLs, $(find "$DIST_DIR" 
 echo ""
 echo "To use:"
 echo "  1. Run setup-firewall.ps1 as Administrator (first time only)"
-echo "  2. Double-click UxPlay.bat or run uxplay_tray.pyw"
+echo "  2. Double-click UxPlay.bat (starts the standalone tray launcher)"

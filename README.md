@@ -32,7 +32,7 @@ Total overhead: one thread doing `select()` with a 1-second timeout. Near-zero C
 1. Download the latest release from [Releases](../../releases)
 2. Extract to any folder
 3. Run `setup-firewall.ps1` as Administrator (first time only — allows UxPlay through Windows Firewall)
-4. Run `UxPlay.bat` (console) or `uxplay_tray.pyw` (system tray icon, requires Python 3 + `pip install pystray pillow`)
+4. Run `UxPlay.bat` (starts the standalone system-tray launcher)
 5. On your Apple device: **Control Center > Screen Mirroring** > select your PC's name
 
 ## Building from Source
@@ -121,13 +121,11 @@ Windows Firewall blocks incoming connections by default. Run `setup-firewall.ps1
 
 ## System Tray Launcher
 
-`uxplay_tray.pyw` runs UxPlay hidden with a system tray icon. Requires:
-
-```
-pip install pystray pillow
-```
-
-Right-click the tray icon to restart or quit.
+`UxPlay.bat` starts `UxPlayTray.exe`, a bundled system-tray launcher. It does
+not require Python, pip, or any other runtime installation. Right-click the
+tray icon to see receiver status, the current song and audio quality, open the
+log, restart UxPlay, or quit. The source `uxplay_tray.pyw` is also included
+for developers who want to run the launcher directly from a Python checkout.
 
 ## Technical Details
 

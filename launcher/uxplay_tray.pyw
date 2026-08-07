@@ -1,59 +1,140 @@
-"""
-UxPlay AirPlay Receiver - System Tray Launcher
-Runs uxplay.exe in the background with a tray icon.
-Right-click the tray icon to quit.
+"""Portable UxPlay system-tray launcher.
 
-Requirements: pip install pystray pillow
+The release contains a frozen UxPlayTray.exe, so end users do not need
+Python, pystray, or Pillow installed.  This source file is also useful when
+running directly from a source checkout.
 """
 
+import datetime
 import os
+import re
 import socket
 import subprocess
 import sys
+import threading
 
 from PIL import Image, ImageDraw
 import pystray
 
-# Paths relative to this script
-SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0] if sys.argv[0] else __file__))
+
+def application_dir():
+    executable = sys.executable if getattr(sys, "frozen", False) else __file__
+    return os.path.dirname(os.path.abspath(executable))
+
+
+SCRIPT_DIR = application_dir()
 UXPLAY_EXE = os.path.join(SCRIPT_DIR, "uxplay.exe")
 GST_PLUGIN_PATH = os.path.join(SCRIPT_DIR, "lib", "gstreamer-1.0")
-
-# Auto-detect a friendly name from the computer's hostname
+LOG_PATH = os.path.join(SCRIPT_DIR, "uxplay.log")
 AIRPLAY_NAME = socket.gethostname()
 
-# UxPlay arguments
 UXPLAY_ARGS = [
     UXPLAY_EXE,
     "-n", AIRPLAY_NAME,
     "-nh",
-    "-vs",
-    "0",
+    "-vs", "0",
 ]
 
 process = None
+log_file = None
+state_lock = threading.Lock()
+stop_monitor = threading.Event()
 
 
 def create_icon_image():
-    """Create a simple AirPlay-style tray icon."""
+    """Create a small AirPlay-style tray icon."""
     size = 64
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
+    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
 
     cx, cy = size // 2, size // 2 + 8
-    for r in [28, 20, 12]:
-        bbox = (cx - r, cy - r, cx + r, cy + r)
+    for radius in (28, 20, 12):
+        bbox = (cx - radius, cy - radius, cx + radius, cy + radius)
         draw.arc(bbox, 200, 340, fill="white", width=3)
 
-    tri_y = cy + 2
-    draw.polygon([(cx - 6, tri_y), (cx + 6, tri_y), (cx, tri_y - 10)], fill="white")
+    draw.polygon(
+        [(cx - 6, cy + 2), (cx + 6, cy + 2), (cx, cy - 10)],
+        fill="white",
+    )
+    return image
 
-    return img
+
+def read_log_tail():
+    try:
+        with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 131072), os.SEEK_SET)
+            return stream.read()
+    except OSError:
+        return ""
+
+
+def latest_line(text, marker):
+    matches = [line.strip() for line in text.splitlines() if marker in line]
+    return matches[-1] if matches else ""
+
+
+def metadata_value(text, field):
+    """Return the last exact metadata field, ignoring similar fields."""
+    pattern = re.compile(r"^" + re.escape(field) + r":\s*(.*)$", re.IGNORECASE)
+    values = []
+    for line in text.splitlines():
+        match = pattern.match(line.strip())
+        if match and match.group(1).strip():
+            values.append(match.group(1).strip())
+    return values[-1] if values else ""
+
+
+def current_song(text):
+    title = metadata_value(text, "Title")
+    artist = metadata_value(text, "Artist")
+    album = metadata_value(text, "Album")
+    if title and artist:
+        song = f"{artist} - {title}"
+    else:
+        song = title or artist or "No song metadata yet"
+    if album:
+        song = f"{song} [{album}]"
+    return song[:110]
+
+
+def status_text(item=None):
+    with state_lock:
+        running = process is not None and process.poll() is None
+    if not running:
+        return "Status: Stopped"
+
+    text = read_log_tail()
+    if "audio error" in text.lower():
+        return "Status: Audio error (view logs)"
+    if "start audio connection" in text or "changed audio connection" in text:
+        return "Status: Audio connected"
+    return "Status: Waiting for AirPlay audio"
+
+
+def song_text(item=None):
+    return "Song: " + current_song(read_log_tail())
+
+
+def quality_text(item=None):
+    line = latest_line(read_log_tail(), "audio quality:")
+    if not line:
+        return "Audio: Waiting for audio"
+    return ("Audio: " + line.split("audio quality:", 1)[-1].strip())[:130]
 
 
 def start_uxplay():
-    """Start the uxplay process hidden."""
-    global process
+    """Start UxPlay hidden and append its console output to the log."""
+    global process, log_file
+
+    stop_uxplay()
+    os.makedirs(SCRIPT_DIR, exist_ok=True)
+    log_file = open(LOG_PATH, "a", encoding="utf-8", errors="replace", buffering=1)
+    log_file.write(
+        "\n=== UxPlay tray session "
+        + datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+        + " ===\n"
+    )
 
     env = os.environ.copy()
     env["GST_PLUGIN_PATH"] = GST_PLUGIN_PATH
@@ -61,45 +142,76 @@ def start_uxplay():
 
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startupinfo.wShowWindow = 0  # SW_HIDE
+    startupinfo.wShowWindow = 0
 
-    process = subprocess.Popen(
-        UXPLAY_ARGS,
-        cwd=SCRIPT_DIR,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        startupinfo=startupinfo,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
+    with state_lock:
+        process = subprocess.Popen(
+            UXPLAY_ARGS,
+            cwd=SCRIPT_DIR,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            startupinfo=startupinfo,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
 
 
 def stop_uxplay():
-    """Stop the uxplay process."""
-    global process
-    if process and process.poll() is None:
-        process.terminate()
+    """Stop UxPlay and close the log handle."""
+    global process, log_file
+
+    with state_lock:
+        current_process = process
+        process = None
+
+    if current_process and current_process.poll() is None:
+        current_process.terminate()
         try:
-            process.wait(timeout=5)
+            current_process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            process.kill()
-    process = None
+            current_process.kill()
+            current_process.wait(timeout=5)
+
+    if log_file:
+        log_file.close()
+        log_file = None
 
 
 def on_quit(icon, item):
+    stop_monitor.set()
     stop_uxplay()
     icon.stop()
 
 
 def on_restart(icon, item):
-    stop_uxplay()
     start_uxplay()
     icon.notify("UxPlay restarted", "AirPlay Receiver")
+    icon.update_menu()
+
+
+def on_view_logs(icon, item):
+    if not os.path.exists(LOG_PATH):
+        with open(LOG_PATH, "a", encoding="utf-8"):
+            pass
+    os.startfile(LOG_PATH)
+
+
+def on_open_folder(icon, item):
+    os.startfile(SCRIPT_DIR)
+
+
+def refresh_menu(icon):
+    while not stop_monitor.wait(1):
+        try:
+            icon.update_menu()
+        except Exception:
+            return
 
 
 def setup(icon):
     icon.visible = True
     start_uxplay()
+    threading.Thread(target=refresh_menu, args=(icon,), daemon=True).start()
 
 
 def main():
@@ -111,7 +223,12 @@ def main():
             pystray.MenuItem(
                 f"AirPlay: {AIRPLAY_NAME}", None, enabled=False
             ),
+            pystray.MenuItem(status_text, None, enabled=False),
+            pystray.MenuItem(song_text, None, enabled=False),
+            pystray.MenuItem(quality_text, None, enabled=False),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("View logs", on_view_logs),
+            pystray.MenuItem("Open folder", on_open_folder),
             pystray.MenuItem("Restart", on_restart),
             pystray.MenuItem("Quit", on_quit),
         ),
