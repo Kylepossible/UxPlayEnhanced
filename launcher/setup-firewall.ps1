@@ -12,18 +12,20 @@ if (-not (Test-Path $exePath)) {
     exit 1
 }
 
-# Remove old rules if they exist
+# Remove old portable rules if they exist
 Remove-NetFirewallRule -DisplayName "UxPlay AirPlay (TCP)" -ErrorAction SilentlyContinue
 Remove-NetFirewallRule -DisplayName "UxPlay AirPlay (UDP)" -ErrorAction SilentlyContinue
+Remove-NetFirewallRule -DisplayName "UxPlayEnhanced AirPlay (TCP)" -ErrorAction SilentlyContinue
+Remove-NetFirewallRule -DisplayName "UxPlayEnhanced AirPlay (UDP)" -ErrorAction SilentlyContinue
 
 # Allow inbound TCP (AirPlay control + mirroring)
-New-NetFirewallRule -DisplayName "UxPlay AirPlay (TCP)" `
+New-NetFirewallRule -DisplayName "UxPlayEnhanced AirPlay (TCP)" `
     -Direction Inbound -Action Allow -Protocol TCP `
     -Program $exePath -Profile Private,Public `
     -Description "Allow AirPlay connections to UxPlay"
 
 # Allow inbound UDP (mDNS discovery + RTP audio/video streams)
-New-NetFirewallRule -DisplayName "UxPlay AirPlay (UDP)" `
+New-NetFirewallRule -DisplayName "UxPlayEnhanced AirPlay (UDP)" `
     -Direction Inbound -Action Allow -Protocol UDP `
     -Program $exePath -Profile Private,Public `
     -Description "Allow AirPlay UDP streams and mDNS to UxPlay"

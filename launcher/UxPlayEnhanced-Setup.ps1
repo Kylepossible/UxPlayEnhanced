@@ -14,7 +14,7 @@ if (-not (Test-IsAdministrator)) {
 
 $sourceDir = Split-Path -Parent $PSCommandPath
 $installDir = Join-Path $env:ProgramFiles "UxPlayEnhanced"
-$trayPath = Join-Path $installDir "UxPlayTray.exe"
+$trayPath = Join-Path $installDir "UxPlayEnhanced.exe"
 $uxplayPath = Join-Path $installDir "uxplay.exe"
 $desktopDir = [Environment]::GetFolderPath("Desktop")
 $startMenuDir = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs"
@@ -31,7 +31,7 @@ if (-not (Test-Path (Join-Path $sourceDir "uxplay.exe"))) {
 }
 
 # Stop only instances launched from this UxPlayEnhanced install directory.
-Get-Process UxPlayTray, uxplay -ErrorAction SilentlyContinue |
+Get-Process UxPlayEnhanced, UxPlayTray, uxplay -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -eq $trayPath -or $_.Path -eq $uxplayPath } |
     ForEach-Object { $_.Kill() }
 
@@ -43,7 +43,7 @@ Get-ChildItem -LiteralPath $sourceDir -Force |
     }
 
 if (-not (Test-Path $trayPath)) {
-    throw "UxPlayTray.exe was not copied to $installDir."
+    throw "UxPlayEnhanced.exe was not copied to $installDir."
 }
 
 # Replace only this application's firewall rules. The child uxplay.exe owns
@@ -81,7 +81,7 @@ $startMenuShortcut.Save()
 $uninstallKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\UxPlayEnhanced"
 New-Item -Path $uninstallKey -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name DisplayName -Value "UxPlayEnhanced" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value "2.3.0" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value "1.0.0" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name Publisher -Value "Kylepossible" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name InstallLocation -Value $installDir -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name UninstallString -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$installDir\UxPlayEnhanced-Uninstall.ps1`"" -PropertyType String -Force | Out-Null

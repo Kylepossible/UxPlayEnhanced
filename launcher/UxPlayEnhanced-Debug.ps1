@@ -6,7 +6,7 @@ $logPath = Join-Path $scriptDir "debug.log"
 $env:GST_PLUGIN_PATH = $pluginPath
 $env:Path = "$scriptDir;$env:Path"
 
-Write-Host "Starting UxPlay debug mode..."
+Write-Host "Starting UxPlayEnhanced debug mode..."
 Write-Host "Connect from your iPhone/iPad, reproduce the issue, then close this window."
 Write-Host "The log will be saved to $logPath"
 

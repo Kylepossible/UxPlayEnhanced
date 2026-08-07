@@ -1,6 +1,6 @@
-"""Portable UxPlay system-tray launcher.
+"""Portable UxPlayEnhanced system-tray launcher.
 
-The release contains a frozen UxPlayTray.exe, so end users do not need
+The release contains a frozen UxPlayEnhanced.exe, so end users do not need
 Python, pystray, or Pillow installed.  This source file is also useful when
 running directly from a source checkout.
 """
@@ -22,10 +22,19 @@ def application_dir():
     return os.path.dirname(os.path.abspath(executable))
 
 
+def resource_path(*parts):
+    if getattr(sys, "frozen", False):
+        base_dir = sys._MEIPASS
+    else:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_dir, *parts)
+
+
 SCRIPT_DIR = application_dir()
 UXPLAY_EXE = os.path.join(SCRIPT_DIR, "uxplay.exe")
 GST_PLUGIN_PATH = os.path.join(SCRIPT_DIR, "lib", "gstreamer-1.0")
-LOG_PATH = os.path.join(SCRIPT_DIR, "uxplay.log")
+LOG_PATH = os.path.join(SCRIPT_DIR, "UxPlayEnhanced.log")
+ICON_PATH = resource_path("assets", "UxPlayEnhanced-icon.png")
 AIRPLAY_NAME = socket.gethostname()
 
 UXPLAY_ARGS = [
@@ -65,21 +74,22 @@ class UxPlayTrayIcon(pystray.Icon):
 
 
 def create_icon_image():
-    """Create a small AirPlay-style tray icon."""
-    size = 64
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-
-    cx, cy = size // 2, size // 2 + 8
-    for radius in (28, 20, 12):
-        bbox = (cx - radius, cy - radius, cx + radius, cy + radius)
-        draw.arc(bbox, 200, 340, fill="white", width=3)
-
-    draw.polygon(
-        [(cx - 6, cy + 2), (cx + 6, cy + 2), (cx, cy - 10)],
-        fill="white",
-    )
-    return image
+    """Load the high-contrast UxPlayEnhanced application icon."""
+    try:
+        with Image.open(ICON_PATH) as source:
+            return source.convert("RGBA")
+    except OSError:
+        # Keep a visible fallback if a developer runs the source without the
+        # bundled asset.
+        image = Image.new("RGBA", (64, 64), (4, 37, 91, 255))
+        draw = ImageDraw.Draw(image)
+        for x, height in ((18, 12), (25, 22), (32, 32), (39, 22), (46, 12)):
+            draw.rounded_rectangle(
+                (x - 2, 32 - height // 2, x + 2, 32 + height // 2),
+                radius=2,
+                fill=(0, 204, 255, 255),
+            )
+        return image
 
 
 def read_log_tail():
@@ -208,7 +218,7 @@ def on_quit(icon, item):
 
 def on_restart(icon, item):
     start_uxplay()
-    icon.notify("UxPlay restarted", "AirPlay Receiver")
+    icon.notify("UxPlay restarted", "UxPlayEnhanced")
     icon.update_menu()
 
 
@@ -240,9 +250,9 @@ def setup(icon):
 
 def main():
     icon = UxPlayTrayIcon(
-        "UxPlay",
+        "UxPlayEnhanced",
         create_icon_image(),
-        f"UxPlay AirPlay Receiver ({AIRPLAY_NAME})",
+        f"UxPlayEnhanced Audio Receiver ({AIRPLAY_NAME})",
         menu=pystray.Menu(
             pystray.MenuItem(
                 f"AirPlay: {AIRPLAY_NAME}", None, enabled=False

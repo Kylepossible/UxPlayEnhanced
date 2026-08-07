@@ -16,7 +16,7 @@ $installDir = Split-Path -Parent $PSCommandPath
 $desktopShortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "UxPlayEnhanced.lnk"
 $startMenuShortcut = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\UxPlayEnhanced.lnk"
 
-Get-Process UxPlayTray, uxplay -ErrorAction SilentlyContinue |
+Get-Process UxPlayEnhanced, UxPlayTray, uxplay -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -like "$installDir\*" } |
     ForEach-Object { $_.Kill() }
 

@@ -17,7 +17,7 @@ export PATH="/mingw64/bin:/usr/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
-DIST_DIR="$SCRIPT_DIR/dist/UxPlay"
+DIST_DIR="$SCRIPT_DIR/dist/UxPlayEnhanced"
 
 if [ -f /mingw64/bin/python.exe ]; then
     BUILD_PYTHON="/mingw64/bin/python.exe"
@@ -50,6 +50,11 @@ echo "=== Building ==="
 mingw32-make -j$(nproc)
 
 echo "=== Packaging ==="
+if [ "$DIST_DIR" != "$SCRIPT_DIR/dist/UxPlayEnhanced" ]; then
+    echo "ERROR: refusing to clean unexpected package path: $DIST_DIR"
+    exit 1
+fi
+rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR/lib/gstreamer-1.0"
 
 # Copy executable
@@ -111,15 +116,19 @@ if [ ! -f "$TRAY_PYTHON" ]; then
 fi
 if [ -n "$TRAY_PYTHON" ] && "$TRAY_PYTHON" -m PyInstaller --version >/dev/null 2>&1; then
     echo "=== Building standalone tray launcher ==="
+    ICON_ICO_WIN="$(cygpath -w "$SCRIPT_DIR/assets/UxPlayEnhanced.ico")"
+    ICON_PNG_WIN="$(cygpath -w "$SCRIPT_DIR/assets/UxPlayEnhanced-icon.png")"
     "$TRAY_PYTHON" -m PyInstaller --noconfirm --clean --onefile --noconsole \
-        --name UxPlayTray \
+        --name UxPlayEnhanced \
+        --icon "$ICON_ICO_WIN" \
+        --add-data "$ICON_PNG_WIN;assets" \
         --distpath "$BUILD_DIR/tray-dist" \
         --workpath "$BUILD_DIR/tray-work" \
         --specpath "$BUILD_DIR/tray-spec" \
         "$SCRIPT_DIR/launcher/uxplay_tray.pyw"
-    cp "$BUILD_DIR/tray-dist/UxPlayTray.exe" "$DIST_DIR/"
+    cp "$BUILD_DIR/tray-dist/UxPlayEnhanced.exe" "$DIST_DIR/"
 else
-    echo "WARNING: Windows Python with PyInstaller was not found; UxPlayTray.exe was not built"
+    echo "WARNING: Windows Python with PyInstaller was not found; UxPlayEnhanced.exe was not built"
 fi
 
 # Copy launcher files, skipping source-checkout cache directories.
@@ -135,4 +144,4 @@ echo "Files: $(find "$DIST_DIR" -name '*.dll' | wc -l) DLLs, $(find "$DIST_DIR" 
 echo ""
 echo "To use:"
 echo "  1. Run setup-firewall.ps1 as Administrator (first time only)"
-echo "  2. Double-click UxPlay.bat (starts the standalone tray launcher)"
+echo "  2. Double-click UxPlayEnhanced.bat (starts the standalone tray launcher)"

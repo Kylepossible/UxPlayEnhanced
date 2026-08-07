@@ -1,45 +1,112 @@
-# UxPlay-NoBojour
+# UxPlayEnhanced
 
-**AirPlay receiver for Windows — no Bonjour service required.**
+**A lightweight, audio-only, Bonjour-free UxPlay distribution for Windows.**
 
-Mirror your iPhone, iPad, or Mac screen and audio to your Windows PC using AirPlay, without needing Apple's Bonjour service installed.
+UxPlayEnhanced turns a Windows PC into an AirPlay audio receiver without
+installing Apple's Bonjour service. It is built on the official
+[FDH2/UxPlay](https://github.com/FDH2/UxPlay) project and keeps UxPlay's audio
+engine while making the packaged Windows experience intentionally audio-first:
+no local video renderer, no always-open terminal, and no external mDNS service.
 
-This project is a fork/wrapper around [UxPlay](https://github.com/FDH2/UxPlay) that replaces the Bonjour/DNS-SD dependency with a built-in embedded mDNS responder. Zero external services needed.
+> Upstream: [FDH2/UxPlay](https://github.com/FDH2/UxPlay). The upstream source
+> is tracked directly in this repository as the `lib/uxplay` Git submodule.
+> UxPlayEnhanced is an independent Windows packaging and integration project,
+> not an official FDH2 release.
 
-## What's Different
+## What UxPlayEnhanced Changes
 
-| | Standard UxPlay | This Fork |
-|---|---|---|
-| **Bonjour Service** | Required (mDNSResponder.exe) | Not needed |
-| **mDNS Discovery** | Via external `dnssd.dll` IPC | Built-in, runs in-process |
-| **Extra Install** | iTunes/iCloud/Bonjour SDK | Nothing — fully self-contained |
-| **Latency** | IPC overhead to Bonjour service | Direct multicast, lower latency |
+| Area | UxPlayEnhanced behavior |
+|---|---|
+| Primary use | AirPlay audio playback on Windows |
+| Video pipeline | Disabled by default with `-vs 0` |
+| Device discovery | Embedded mDNS; Apple Bonjour is not required |
+| User interface | Background tray application with status, song, quality, and logs |
+| Installation | Self-elevating setup creates firewall rules and shortcuts |
+| Audio information | Logs codec, lossless/lossy classification, and receiver format |
+| Console noise | Suppresses repeated unchanged metadata blocks |
 
-### How It Works
+“Lightweight” refers to runtime behavior: the normal launcher does not create a
+video decode/render pipeline and does not require a separate Bonjour service.
+The release still includes the GStreamer and FFmpeg libraries required by
+UxPlay's audio stack.
 
-The `dnssd_embedded.c` file is a drop-in replacement for UxPlay's `dnssd.c`. Instead of loading Apple's `dnssd.dll` and communicating with the Bonjour Windows service, it:
+## Install
 
-1. Starts a lightweight background thread listening on UDP multicast `224.0.0.251:5353`
-2. Responds to mDNS queries for `_airplay._tcp` and `_raop._tcp` services
-3. Sends proactive mDNS announcements when the server starts
-4. Sends goodbye packets (TTL=0) on shutdown so clients flush stale caches
-5. Implements TXT record encoding inline — no external library needed
+1. Download the latest Windows ZIP from the
+   [UxPlayEnhanced releases](https://github.com/Kylepossible/UxPlayEnhanced/releases).
+2. Extract the complete ZIP.
+3. Run `UxPlayEnhanced-Setup.cmd`.
+4. Approve the Windows administrator prompt.
+5. Launch **UxPlayEnhanced** from the desktop or Start menu.
+6. Open the AirPlay output selector on the iPhone, iPad, or Mac and choose the
+   Windows computer's name.
 
-Total overhead: one thread doing `select()` with a 1-second timeout. Near-zero CPU when idle.
+The setup installs to `C:\Program Files\UxPlayEnhanced`, creates the inbound
+TCP and UDP firewall rules used by AirPlay, adds desktop and Start-menu
+shortcuts, and registers an uninstall entry in Windows Apps and Features.
 
-## Quick Start (Pre-built)
+### Portable Use
 
-1. Download the latest release from [Releases](../../releases)
-2. Extract the ZIP
-3. Run `UxPlayEnhanced-Setup.cmd`; it installs the receiver, creates a desktop shortcut, and configures the AirPlay firewall rules
-4. Launch `UxPlayEnhanced` from the desktop
-5. On your Apple device: **Control Center > Screen Mirroring** > select your PC's name
+Installation is optional. Extract the ZIP, run `setup-firewall.ps1` once as
+Administrator, then launch `UxPlayEnhanced.bat`. The portable launcher also starts in
+audio-only mode and uses the tray application when available.
 
-## Building from Source
+## Tray Application
 
-### Prerequisites
+The bundled `UxPlayEnhanced.exe` runs UxPlay without an open terminal window.
+Right-click its blue tray icon to see:
 
-Install [MSYS2](https://www.msys2.org/), then in a **MinGW64** shell:
+- Receiver and connection status
+- Current artist, song, and album metadata
+- Audio codec and receiver quality
+- View logs and open the installation folder
+- Restart and quit controls
+
+The executable bundles its Python runtime and tray dependencies. End users do
+not need Python, `pip`, `pystray`, or Pillow installed.
+
+## Audio-Only Behavior
+
+All included launchers pass `-vs 0`, which disables UxPlay's local video sink.
+This avoids local video decoding, rendering, and video-timing work while keeping
+AirPlay audio reception active. The underlying `uxplay.exe` remains available
+for advanced users, but screen mirroring is outside this distribution's normal
+supported workflow. Use upstream [FDH2/UxPlay](https://github.com/FDH2/UxPlay)
+when full video-mirroring behavior is the priority.
+
+## Audio Format Logging
+
+When an audio session starts, UxPlayEnhanced logs the codec, lossless/lossy
+classification, receiver resolution, channel count, and equivalent decoded PCM
+bitrate. `ALAC` (`ct=2`) is lossless and `AAC-ELD` (`ct=8`) is lossy.
+
+The current receiver profile is 16-bit/44.1 kHz. The log therefore reports the
+format received and decoded by UxPlay; it does not claim to measure the source
+service's encoded bitrate or prove that an Apple Music source was Hi-Res
+Lossless. Repeated identical DMAP metadata updates are omitted from the console.
+
+## Bonjour-Free Discovery
+
+UxPlayEnhanced replaces UxPlay's Windows Bonjour/DNS-SD dependency with the
+embedded responder in `src/dnssd_embedded.c`. It:
+
+- Listens for mDNS on UDP multicast `224.0.0.251:5353`
+- Advertises `_airplay._tcp` and `_raop._tcp`
+- Responds with PTR, SRV, TXT, and A records
+- Sends startup announcements and TTL=0 goodbye records
+- Runs in-process without `dnssd.dll`, iTunes, iCloud, or Bonjour services
+
+## Build from Source
+
+Clone this repository with its official UxPlay submodule:
+
+```bash
+git clone --recurse-submodules https://github.com/Kylepossible/UxPlayEnhanced.git
+cd UxPlayEnhanced
+```
+
+Install [MSYS2](https://www.msys2.org/), then install the MinGW64 build
+dependencies:
 
 ```bash
 pacman -S --needed \
@@ -55,104 +122,30 @@ pacman -S --needed \
   mingw-w64-x86_64-pkg-config
 ```
 
-### Build
+The standalone tray executable also requires a Windows Python build environment
+with PyInstaller, `pystray`, and Pillow. Run the build from MSYS2:
 
 ```bash
-git clone --recurse-submodules https://github.com/YOUR_USERNAME/uxplay-nobonjour.git
-cd uxplay-nobonjour
 bash build.sh
 ```
 
-The self-contained output goes to `dist/UxPlay/`.
+The self-contained package is written to `dist/UxPlayEnhanced/`.
 
-### Manual Build
+## Project Layout
 
-If you prefer to build manually:
+- `lib/uxplay/` — official [FDH2/UxPlay](https://github.com/FDH2/UxPlay) source submodule
+- `src/dnssd_embedded.c` — embedded Windows mDNS/DNS-SD implementation
+- `patch_cmake.py` — applies the integration, audio-quality, and metadata patches
+- `launcher/uxplay_tray.pyw` — UxPlayEnhanced tray application source
+- `launcher/UxPlayEnhanced-Setup.*` — installer entry point and setup logic
+- `assets/` — application and tray icon assets
+- `build.sh` — builds UxPlay, resolves DLL dependencies, and packages the release
 
-```bash
-# Apply the embedded mDNS patch
-python patch_cmake.py
+## License and Attribution
 
-# Build
-mkdir build && cd build
-cmake ../lib/uxplay -G "MinGW Makefiles" -DUSE_EMBEDDED_MDNS=ON -DNO_MARCH_NATIVE=ON -DCMAKE_BUILD_TYPE=Release
-mingw32-make -j$(nproc)
-```
+UxPlayEnhanced uses [FDH2/UxPlay](https://github.com/FDH2/UxPlay) as its core
+AirPlay implementation. UxPlay is licensed under LGPL-2.1. See [LICENSE](LICENSE)
+and [lib/uxplay/LICENSE](lib/uxplay/LICENSE).
 
-## Usage
-
-```
-uxplay.exe [options]
-```
-
-Key options:
-| Flag | Description |
-|------|-------------|
-| `-n name` | Name shown on Apple devices (default: hostname) |
-| `-nh` | Don't append hostname suffix to the name |
-| `-vs 0` | Audio-only mode; disables the local video renderer |
-| `-h265` | Enable H.265/4K video support |
-| `-vsync` | Sync audio to video (recommended) |
-| `-pin` | Require a PIN code for connections |
-| `-d` | Debug output |
-
-Run `uxplay.exe --help` for all options.
-
-The included `UxPlay.bat`, tray launcher, and debug launcher default to
-audio-only mode. This avoids starting the local video decode/render pipeline,
-reducing CPU/GPU use and video-related timing pressure. Use the raw command
-line with a video sink such as `-vs autovideosink` when screen mirroring is
-wanted.
-
-### Audio Format Logging
-
-When an AirPlay audio session starts, UxPlay logs the codec, lossless/lossy
-classification, receiver resolution, channel count, and equivalent decoded
-PCM bitrate. `ALAC` (`ct=2`) is lossless; `AAC-ELD` (`ct=8`) is lossy. The
-current Windows receiver profile is fixed at 16-bit/44.1 kHz, so the log does
-not claim to measure an encoded ALAC bitrate or Hi-Res Lossless source rate.
-Repeated unchanged DMAP metadata updates are suppressed in the console; a
-metadata block is printed again only when its contents change or a new audio
-session starts.
-
-## Firewall Setup
-
-Windows Firewall blocks incoming connections by default. Run `setup-firewall.ps1` as Administrator once to create allow rules for `uxplay.exe` (TCP + UDP inbound).
-
-## System Tray Launcher
-
-`UxPlayEnhanced-Setup.cmd` installs `UxPlayTray.exe`, creates an
-`UxPlayEnhanced` desktop shortcut, and configures the TCP/UDP firewall rules
-automatically. It does not require Python, pip, or any other runtime
-installation. Right-click the tray icon to see receiver status, the current
-song and audio quality, open the log, restart UxPlay, or quit. The installer
-also registers `UxPlayEnhanced` for removal from Windows Apps and Features.
-The portable `UxPlay.bat` path remains available when no installation is
-wanted.
-
-## Technical Details
-
-### Embedded mDNS Implementation
-
-The embedded responder (`lib/uxplay/lib/dnssd_embedded.c`) implements:
-
-- **RFC 6762** (Multicast DNS) — joins `224.0.0.251:5353`, responds to queries
-- **RFC 6763** (DNS-SD) — registers `_airplay._tcp` and `_raop._tcp` services
-- **DNS record types**: PTR, SRV, TXT, A with proper TTLs and cache-flush bits
-- **One-shot discovery**: PTR responses include SRV+TXT+A in the additional section
-- **Announcements**: 3x multicast announcements on service registration (250ms apart)
-- **Goodbye packets**: TTL=0 records on unregistration
-
-### CMake Integration
-
-The `USE_EMBEDDED_MDNS` CMake option (default OFF in upstream, ON in this project) swaps `dnssd.c` for `dnssd_embedded.c` and skips all Bonjour/Avahi SDK detection. The build-time patch also adds the audio-quality log and suppresses repeated unchanged metadata blocks in `uxplay.cpp`.
-
-## Credits
-
-- [UxPlay](https://github.com/FDH2/UxPlay) by FDH2 — the core AirPlay server
-- [leapbtw/uxplay-windows](https://github.com/leapbtw/uxplay-windows) — inspiration for the Windows packaging approach
-- Embedded mDNS implementation by Claude (Anthropic)
-
-## License
-
-LGPL 2.1 — same as UxPlay. See [LICENSE](LICENSE) and [lib/uxplay/LICENSE](lib/uxplay/LICENSE).
+Windows packaging was also informed by
+[leapbtw/uxplay-windows](https://github.com/leapbtw/uxplay-windows).
