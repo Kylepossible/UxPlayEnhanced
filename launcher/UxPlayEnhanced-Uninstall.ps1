@@ -12,7 +12,12 @@ if (-not (Test-IsAdministrator)) {
     exit 0
 }
 
-$installDir = Split-Path -Parent $PSCommandPath
+$scriptDir = Split-Path -Parent $PSCommandPath
+if ((Split-Path -Leaf $scriptDir) -like "app-*") {
+    $installDir = Split-Path -Parent $scriptDir
+} else {
+    $installDir = $scriptDir
+}
 $desktopShortcut = Join-Path ([Environment]::GetFolderPath("CommonDesktopDirectory")) "UxPlayEnhanced.lnk"
 $startMenuShortcut = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\UxPlayEnhanced.lnk"
 

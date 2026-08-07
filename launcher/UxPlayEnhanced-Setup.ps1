@@ -1,3 +1,7 @@
+param(
+    [switch]$SkipPause
+)
+
 $ErrorActionPreference = "Stop"
 
 function Test-IsAdministrator {
@@ -8,13 +12,105 @@ function Test-IsAdministrator {
 
 if (-not (Test-IsAdministrator)) {
     $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '"'
+    if ($SkipPause) {
+        $arguments += ' -SkipPause'
+    }
     $elevatedProcess = Start-Process -FilePath "powershell.exe" -Verb RunAs `
         -ArgumentList $arguments -Wait -PassThru
     exit $elevatedProcess.ExitCode
 }
 
+function Stop-InstalledProcesses {
+    param([Parameter(Mandatory = $true)][string]$InstallDirectory)
+
+    $installPrefix = [System.IO.Path]::GetFullPath($InstallDirectory).TrimEnd('\') + '\'
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    $processFreeSince = $null
+    do {
+        $targets = @(
+            Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+                $_.ExecutablePath -and
+                $_.ExecutablePath.StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+            }
+        )
+
+        if ($targets.Count -eq 0) {
+            if ($null -eq $processFreeSince) {
+                $processFreeSince = [DateTime]::UtcNow
+            } elseif (([DateTime]::UtcNow - $processFreeSince).TotalSeconds -ge 1) {
+                return
+            }
+        } else {
+            $processFreeSince = $null
+            foreach ($target in $targets) {
+                Write-Host "Stopping $($target.Name) (PID $($target.ProcessId))..."
+                try {
+                    Stop-Process -Id $target.ProcessId -Force -ErrorAction Stop
+                } catch {
+                    if (Get-Process -Id $target.ProcessId -ErrorAction SilentlyContinue) {
+                        Write-Warning "Could not stop $($target.Name) (PID $($target.ProcessId)): $($_.Exception.Message)"
+                    }
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    $remaining = @(
+        Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $_.ExecutablePath -and
+            $_.ExecutablePath.StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+        }
+    )
+    $remainingText = $remaining | ForEach-Object { "$($_.Name) (PID $($_.ProcessId))" }
+    throw "Installed UxPlayEnhanced processes did not stop: $($remainingText -join ', ')."
+}
+
+function Copy-PackageFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    $sourceItem = Get-Item -LiteralPath $Source -Force
+    if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+        $destinationItem = Get-Item -LiteralPath $Destination -Force
+        if ($sourceItem.Length -eq $destinationItem.Length) {
+            $sourceHash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
+            $destinationHash = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+            if ($sourceHash -eq $destinationHash) {
+                return $false
+            }
+        }
+    }
+
+    $destinationDirectory = Split-Path -Parent $Destination
+    New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+
+    $attempts = 60
+    for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+        try {
+            Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
+            $sourceHash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
+            $destinationHash = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+            if ($sourceHash -ne $destinationHash) {
+                throw "Hash verification failed after copying $Destination."
+            }
+            return $true
+        } catch {
+            if ($attempt -eq $attempts) {
+                throw
+            }
+            Write-Warning "Copy attempt $attempt failed for $Destination; retrying..."
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
+$version = "1.0.3"
 $sourceDir = Split-Path -Parent $PSCommandPath
-$installDir = Join-Path $env:ProgramFiles "UxPlayEnhanced"
+$productRoot = Join-Path $env:ProgramFiles "UxPlayEnhanced"
+$installDir = Join-Path $productRoot "app-$version"
 $trayPath = Join-Path $installDir "UxPlayEnhanced.exe"
 $uxplayPath = Join-Path $installDir "uxplay.exe"
 $desktopDir = [Environment]::GetFolderPath("CommonDesktopDirectory")
@@ -37,17 +133,24 @@ if (-not (Test-Path (Join-Path $sourceDir "uxplay.exe"))) {
 Get-ChildItem -LiteralPath $sourceDir -Recurse -File -Force |
     Unblock-File -ErrorAction SilentlyContinue
 
-# Stop only instances launched from this UxPlayEnhanced install directory.
-Get-Process UxPlayEnhanced, UxPlayTray, uxplay -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -eq $trayPath -or $_.Path -eq $uxplayPath } |
-    ForEach-Object { $_.Kill() }
+# Stop every running executable from any installed UxPlayEnhanced version and
+# wait for the product directory to stay process-free before upgrading.
+Stop-InstalledProcesses -InstallDirectory $productRoot
 
 New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-Get-ChildItem -LiteralPath $sourceDir -Force |
-    Where-Object { $_.Name -notin $excludedFiles } |
-    ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination $installDir -Recurse -Force
+$copiedFileCount = 0
+$unchangedFileCount = 0
+Get-ChildItem -LiteralPath $sourceDir -Recurse -File -Force | ForEach-Object {
+    $relativePath = $_.FullName.Substring($sourceDir.Length).TrimStart('\')
+    if ($relativePath -notin $excludedFiles) {
+        $destinationPath = Join-Path $installDir $relativePath
+        if (Copy-PackageFile -Source $_.FullName -Destination $destinationPath) {
+            $copiedFileCount++
+        } else {
+            $unchangedFileCount++
+        }
     }
+}
 
 if (-not (Test-Path $trayPath)) {
     throw "UxPlayEnhanced.exe was not copied to $installDir."
@@ -137,14 +240,18 @@ $startMenuShortcut.Save()
 $uninstallKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\UxPlayEnhanced"
 New-Item -Path $uninstallKey -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name DisplayName -Value "UxPlayEnhanced" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value "1.0.2" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value $version -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name Publisher -Value "Kylepossible" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $uninstallKey -Name InstallLocation -Value $installDir -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name InstallLocation -Value $productRoot -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name DisplayIcon -Value $trayPath -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name UninstallString -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$installDir\UxPlayEnhanced-Uninstall.ps1`"" -PropertyType String -Force | Out-Null
 
 Write-Host "UxPlayEnhanced installed to $installDir" -ForegroundColor Green
+Write-Host "Package files verified: $copiedFileCount updated, $unchangedFileCount unchanged." -ForegroundColor Green
 Write-Host "Desktop shortcut created and verified: $desktopShortcutPath" -ForegroundColor Green
 Write-Host "Firewall rules created and verified for AirPlay TCP and UDP." -ForegroundColor Green
 Write-Host ""
 Write-Host "You can now launch UxPlayEnhanced from the desktop." -ForegroundColor Cyan
-Read-Host "Press Enter to close"
+if (-not $SkipPause) {
+    Read-Host "Press Enter to close"
+}
