@@ -41,6 +41,29 @@ state_lock = threading.Lock()
 stop_monitor = threading.Event()
 
 
+class UxPlayTrayIcon(pystray.Icon):
+    """Keep dynamic menu updates from interrupting Windows hover tracking."""
+
+    _WM_RBUTTONUP = 0x0205
+
+    def __init__(self, *args, **kwargs):
+        self.menu_open = False
+        super().__init__(*args, **kwargs)
+
+    def _on_notify(self, wparam, lparam):
+        is_context_menu = lparam == self._WM_RBUTTONUP
+        if is_context_menu:
+            # Refresh before TrackPopupMenuEx starts. Rebuilding the native
+            # HMENU while it is open breaks Windows' hover/highlight state.
+            self.menu_open = True
+            self.update_menu()
+        try:
+            return super()._on_notify(wparam, lparam)
+        finally:
+            if is_context_menu:
+                self.menu_open = False
+
+
 def create_icon_image():
     """Create a small AirPlay-style tray icon."""
     size = 64
@@ -203,7 +226,8 @@ def on_open_folder(icon, item):
 def refresh_menu(icon):
     while not stop_monitor.wait(1):
         try:
-            icon.update_menu()
+            if not icon.menu_open:
+                icon.update_menu()
         except Exception:
             return
 
@@ -215,7 +239,7 @@ def setup(icon):
 
 
 def main():
-    icon = pystray.Icon(
+    icon = UxPlayTrayIcon(
         "UxPlay",
         create_icon_image(),
         f"UxPlay AirPlay Receiver ({AIRPLAY_NAME})",

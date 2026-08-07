@@ -30,9 +30,9 @@ Total overhead: one thread doing `select()` with a 1-second timeout. Near-zero C
 ## Quick Start (Pre-built)
 
 1. Download the latest release from [Releases](../../releases)
-2. Extract to any folder
-3. Run `setup-firewall.ps1` as Administrator (first time only — allows UxPlay through Windows Firewall)
-4. Run `UxPlay.bat` (starts the standalone system-tray launcher)
+2. Extract the ZIP
+3. Run `UxPlayEnhanced-Setup.cmd`; it installs the receiver, creates a desktop shortcut, and configures the AirPlay firewall rules
+4. Launch `UxPlayEnhanced` from the desktop
 5. On your Apple device: **Control Center > Screen Mirroring** > select your PC's name
 
 ## Building from Source
@@ -121,11 +121,14 @@ Windows Firewall blocks incoming connections by default. Run `setup-firewall.ps1
 
 ## System Tray Launcher
 
-`UxPlay.bat` starts `UxPlayTray.exe`, a bundled system-tray launcher. It does
-not require Python, pip, or any other runtime installation. Right-click the
-tray icon to see receiver status, the current song and audio quality, open the
-log, restart UxPlay, or quit. The source `uxplay_tray.pyw` is also included
-for developers who want to run the launcher directly from a Python checkout.
+`UxPlayEnhanced-Setup.cmd` installs `UxPlayTray.exe`, creates an
+`UxPlayEnhanced` desktop shortcut, and configures the TCP/UDP firewall rules
+automatically. It does not require Python, pip, or any other runtime
+installation. Right-click the tray icon to see receiver status, the current
+song and audio quality, open the log, restart UxPlay, or quit. The installer
+also registers `UxPlayEnhanced` for removal from Windows Apps and Features.
+The portable `UxPlay.bat` path remains available when no installation is
+wanted.
 
 ## Technical Details
 
