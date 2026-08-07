@@ -189,11 +189,35 @@ The self-contained package is written to `dist/UxPlayEnhanced/`.
 - `assets/` — application and tray icon assets
 - `build.sh` — builds UxPlay, resolves DLL dependencies, and packages the release
 
-## License and Attribution
+## License
 
-UxPlayEnhanced uses [FDH2/UxPlay](https://github.com/FDH2/UxPlay) as its core
-AirPlay implementation. UxPlay is licensed under LGPL-2.1. See [LICENSE](LICENSE)
-and [lib/uxplay/LICENSE](lib/uxplay/LICENSE).
+UxPlayEnhanced is distributed under the **GNU General Public License v3.0**. See
+[LICENSE](LICENSE).
+
+UxPlayEnhanced builds on [FDH2/UxPlay](https://github.com/FDH2/UxPlay), which is
+licensed under GPL-3.0, and every release ships a patched `uxplay.exe`. A
+modified GPLv3 work must itself be distributed under GPLv3, so that license
+covers this repository and all binary releases.
+
+Per-component notes:
+
+| Component | License |
+|---|---|
+| `lib/uxplay/` (submodule) | GPL-3.0 — see [lib/uxplay/LICENSE](lib/uxplay/LICENSE) |
+| `lib/uxplay/lib/` (upstream AirPlay library, derived from RPiPlay/shairplay) | LGPL-2.1-or-later |
+| `src/dnssd_embedded.c` | LGPL-2.1-or-later, matching the upstream `lib/dnssd.c` it replaces |
+| `patch_cmake.py`, `build.sh`, `launcher/` | GPL-3.0 |
+
+`src/dnssd_embedded.c` stays under LGPL-2.1-or-later so it remains usable in the
+same places upstream's `lib/dnssd.c` is; the "or later" grant makes it
+compatible with the GPL-3.0 work it links into.
+
+The complete corresponding source for a binary release is this repository at the
+matching tag, together with the `lib/uxplay` submodule commit it pins.
+
+## Attribution
+
+Core AirPlay implementation: [FDH2/UxPlay](https://github.com/FDH2/UxPlay).
 
 Windows packaging was also informed by
 [leapbtw/uxplay-windows](https://github.com/leapbtw/uxplay-windows).
