@@ -83,7 +83,9 @@ Right-click its blue tray icon to see:
 Logs are stored at
 `%LOCALAPPDATA%\UxPlayEnhanced\Logs\UxPlayEnhanced.log`. **View logs** opens
 that file directly in Notepad, without relying on a Windows `.log` file
-association.
+association. The log rotates at 5 MB and keeps two older files
+(`UxPlayEnhanced.log.1` and `.log.2`), so a long-running receiver cannot fill
+the disk.
 
 Normal logs omit the once-per-second track progress display. Launch
 `UxPlayEnhanced.exe --verbose` when troubleshooting to include those progress
