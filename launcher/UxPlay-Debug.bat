@@ -6,6 +6,7 @@ set PATH=%~dp0;%PATH%
 
 echo Starting UxPlay in debug mode...
 echo Connect from your iPhone/iPad, let it play, then close this window when done.
+echo The log will be saved to debug.log in this folder.
 echo.
-uxplay.exe -n "%COMPUTERNAME%" -nh -d -vsync 2>&1 | tee debug.log
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& '%~dp0uxplay.exe' -n '%COMPUTERNAME%' -nh -d -vsync 2^>^&1 ^| Tee-Object -FilePath '%~dp0debug.log'"
 pause
