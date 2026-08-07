@@ -64,6 +64,12 @@ for lib in libgstvideo-1.0-0 libgstsdp-1.0-0 libgstpbutils-1.0-0 \
     cp /mingw64/bin/${lib}.dll "$DIST_DIR/" 2>/dev/null || true
 done
 
+# FFmpeg's avcodec can import xvidcore.dll. On the build PC, ldd may resolve
+# it from Windows/System32, so copy the MinGW runtime explicitly for portable
+# installs on machines without that system DLL.
+cp /mingw64/bin/xvidcore.dll "$DIST_DIR/" 2>/dev/null || \
+    echo "WARNING: /mingw64/bin/xvidcore.dll was not found; avcodec may not load on another PC"
+
 # Copy GStreamer plugins
 for plugin in libgstcoreelements libgstplayback libgstvideoconvertscale \
               libgstautodetect libgstaudioconvert libgstaudioresample \
