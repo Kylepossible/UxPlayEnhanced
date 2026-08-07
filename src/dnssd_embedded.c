@@ -25,6 +25,13 @@
 #include "global.h"
 #include "utils.h"
 
+#ifdef WIN32
+#include <iphlpapi.h>
+#else
+#include <ifaddrs.h>
+#include <net/if.h>
+#endif
+
 #define MAX_DEVICEID 18
 #define MAX_SERVNAME 256
 
@@ -52,6 +59,14 @@
 /* Announcement repeat count and interval (ms) */
 #define ANNOUNCE_COUNT  3
 #define ANNOUNCE_INTERVAL_MS 250
+
+/* Use the record's normal TTL rather than an explicit override. */
+#define TTL_USE_DEFAULT (-1)
+
+/* Interfaces the responder will advertise on, and how often the list is
+ * rechecked so that joining Wi-Fi, docking, or raising a VPN is picked up. */
+#define MAX_MDNS_IFACES 16
+#define IFACE_REFRESH_INTERVAL_S 15
 
 /* ------------------------------------------------------------------ */
 /*  TXT Record helpers (replaces Bonjour TXTRecord* functions)        */
@@ -144,9 +159,16 @@ struct dnssd_s {
     thread_handle_t mdns_thread;
     int             mdns_sock;       /* UDP socket (SOCKET on Windows) */
     volatile int    mdns_running;
-    uint32_t        local_ip;        /* network byte order */
     char            hostname[128];   /* "UxPlay-XXXX.local" */
     mutex_handle_t  lock;
+
+    /* Local IPv4 addresses to advertise on, network byte order. Guarded by
+     * iface_lock, which is also held across a send so that the per-interface
+     * IP_MULTICAST_IF setting cannot be changed by another thread mid-send.
+     * Lock order is always lock -> iface_lock; never the reverse. */
+    uint32_t        ifaces[MAX_MDNS_IFACES];
+    int             iface_count;
+    mutex_handle_t  iface_lock;
 };
 
 /* ------------------------------------------------------------------ */
@@ -355,11 +377,16 @@ static int write_a_record(uint8_t *buf, int buf_size, const char *hostname,
  * Build a complete mDNS response packet for a service, given a query type.
  * For PTR queries: answer=PTR + additional=SRV,TXT,A (one-shot discovery).
  * For SRV/TXT/A queries: answer=requested record + additional records.
+ * local_ip is the address of the interface this response will be sent on, so
+ * each interface advertises the address a client on that link can reach.
+ * ttl_override is TTL_USE_DEFAULT for normal records, or an explicit TTL --
+ * notably 0, which is how a goodbye packet asks clients to flush.
  * Returns total packet size, or -1 on error.
  */
 static int build_mdns_response(dnssd_t *dnssd, mdns_service_t *svc,
                                txt_record_t *txt_rec, int query_type,
-                               uint8_t *pkt, int pkt_size, uint32_t ttl_override)
+                               uint8_t *pkt, int pkt_size, int ttl_override,
+                               uint32_t local_ip)
 {
     char type_fqdn[MAX_SERVNAME];
     char inst_fqdn[MAX_SERVNAME];
@@ -369,8 +396,8 @@ static int build_mdns_response(dnssd_t *dnssd, mdns_service_t *svc,
     build_fqsn(svc, inst_fqdn, sizeof(inst_fqdn));
     snprintf(host_fqdn, sizeof(host_fqdn), "%s.local", dnssd->hostname);
 
-    uint32_t ttl = ttl_override ? ttl_override : TTL_DEFAULT;
-    uint32_t ttl_host = ttl_override ? ttl_override : TTL_HOST;
+    uint32_t ttl = ttl_override >= 0 ? (uint32_t) ttl_override : TTL_DEFAULT;
+    uint32_t ttl_host = ttl_override >= 0 ? (uint32_t) ttl_override : TTL_HOST;
 
     int pos = 12; /* skip header, fill in later */
     int ancount = 0, arcount = 0;
@@ -390,7 +417,7 @@ static int build_mdns_response(dnssd_t *dnssd, mdns_service_t *svc,
         n = write_txt_record(pkt + pos, pkt_size - pos, inst_fqdn,
                              txt_rec->data, txt_rec->len, ttl);
         if (n > 0) { pos += n; arcount++; }
-        n = write_a_record(pkt + pos, pkt_size - pos, host_fqdn, dnssd->local_ip, ttl_host);
+        n = write_a_record(pkt + pos, pkt_size - pos, host_fqdn, local_ip, ttl_host);
         if (n > 0) { pos += n; arcount++; }
         break;
 
@@ -399,7 +426,7 @@ static int build_mdns_response(dnssd_t *dnssd, mdns_service_t *svc,
         if (n < 0) return -1;
         pos += n; ancount++;
         /* Additional: A */
-        n = write_a_record(pkt + pos, pkt_size - pos, host_fqdn, dnssd->local_ip, ttl_host);
+        n = write_a_record(pkt + pos, pkt_size - pos, host_fqdn, local_ip, ttl_host);
         if (n > 0) { pos += n; arcount++; }
         break;
 
@@ -411,7 +438,7 @@ static int build_mdns_response(dnssd_t *dnssd, mdns_service_t *svc,
         break;
 
     case DNS_TYPE_A:
-        n = write_a_record(pkt + pos, pkt_size - pos, host_fqdn, dnssd->local_ip, ttl_host);
+        n = write_a_record(pkt + pos, pkt_size - pos, host_fqdn, local_ip, ttl_host);
         if (n < 0) return -1;
         pos += n; ancount++;
         break;
@@ -429,27 +456,6 @@ static int build_mdns_response(dnssd_t *dnssd, mdns_service_t *svc,
     write_u16(pkt + 10, (uint16_t)arcount);
 
     return pos;
-}
-
-/**
- * Build a full announcement packet containing all records for a service.
- * Used for proactive multicast announcements on registration.
- */
-static int build_announcement(dnssd_t *dnssd, mdns_service_t *svc,
-                              txt_record_t *txt_rec, uint8_t *pkt, int pkt_size,
-                              uint32_t ttl_override)
-{
-    return build_mdns_response(dnssd, svc, txt_rec, DNS_TYPE_PTR,
-                               pkt, pkt_size, ttl_override);
-}
-
-/**
- * Build a goodbye packet (TTL=0) to tell clients to flush cached records.
- */
-static int build_goodbye(dnssd_t *dnssd, mdns_service_t *svc,
-                         txt_record_t *txt_rec, uint8_t *pkt, int pkt_size)
-{
-    return build_announcement(dnssd, svc, txt_rec, pkt, pkt_size, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -486,8 +492,139 @@ static uint32_t get_local_ip(void)
     return local.sin_addr.s_addr; /* network byte order */
 }
 
+/**
+ * Collect every usable local IPv4 address.
+ *
+ * get_local_ip() alone is not enough: it reports only the interface that
+ * happens to route toward the internet, so a multi-homed PC advertised on the
+ * wrong link, a VPN could hide the LAN, and a machine with no default route
+ * got nothing at all. Returns the number of addresses written.
+ */
+static int enumerate_local_ipv4(uint32_t *out, int max_count)
+{
+    int count = 0;
+
+#ifdef WIN32
+    ULONG size = 16384;
+    IP_ADAPTER_ADDRESSES *adapters = NULL;
+    ULONG result = ERROR_BUFFER_OVERFLOW;
+    int attempts = 0;
+
+    while (result == ERROR_BUFFER_OVERFLOW && attempts++ < 4) {
+        IP_ADAPTER_ADDRESSES *resized =
+            (IP_ADAPTER_ADDRESSES *)realloc(adapters, size);
+        if (!resized) {
+            free(adapters);
+            return 0;
+        }
+        adapters = resized;
+        result = GetAdaptersAddresses(AF_INET,
+                                      GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                                      GAA_FLAG_SKIP_DNS_SERVER,
+                                      NULL, adapters, &size);
+    }
+
+    if (result != NO_ERROR) {
+        free(adapters);
+        return 0;
+    }
+
+    for (IP_ADAPTER_ADDRESSES *adapter = adapters;
+         adapter && count < max_count; adapter = adapter->Next) {
+        if (adapter->OperStatus != IfOperStatusUp) continue;
+        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+        for (IP_ADAPTER_UNICAST_ADDRESS *unicast = adapter->FirstUnicastAddress;
+             unicast && count < max_count; unicast = unicast->Next) {
+            if (!unicast->Address.lpSockaddr ||
+                unicast->Address.lpSockaddr->sa_family != AF_INET) continue;
+            uint32_t ip =
+                ((struct sockaddr_in *)unicast->Address.lpSockaddr)->sin_addr.s_addr;
+            if (ip == 0 || (ntohl(ip) >> 24) == 127) continue;
+            out[count++] = ip;
+        }
+    }
+    free(adapters);
+#else
+    struct ifaddrs *list = NULL;
+    if (getifaddrs(&list) != 0) return 0;
+    for (struct ifaddrs *entry = list; entry && count < max_count;
+         entry = entry->ifa_next) {
+        if (!entry->ifa_addr || entry->ifa_addr->sa_family != AF_INET) continue;
+        if (!(entry->ifa_flags & IFF_UP)) continue;
+        if (entry->ifa_flags & IFF_LOOPBACK) continue;
+        uint32_t ip = ((struct sockaddr_in *)entry->ifa_addr)->sin_addr.s_addr;
+        if (ip == 0) continue;
+        out[count++] = ip;
+    }
+    freeifaddrs(list);
+#endif
+
+    return count;
+}
+
+static int iface_listed(const uint32_t *list, int count, uint32_t ip)
+{
+    for (int i = 0; i < count; i++) {
+        if (list[i] == ip) return 1;
+    }
+    return 0;
+}
+
+/** Join or leave the mDNS multicast group on one interface. */
+static void set_group_membership(int sock, uint32_t iface_ip, int join)
+{
+    struct ip_mreq mreq;
+    mreq.imr_multiaddr.s_addr = inet_addr(MDNS_ADDR);
+    mreq.imr_interface.s_addr = iface_ip;
+    setsockopt(sock, IPPROTO_IP, join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP,
+               (const char *)&mreq, sizeof(mreq));
+}
+
+/**
+ * Re-read the interface list, joining the group on interfaces that appeared
+ * and leaving it on ones that went away. Returns the number of newly added
+ * interfaces so the caller can announce on them.
+ */
+static int refresh_interfaces(dnssd_t *dnssd)
+{
+    uint32_t found[MAX_MDNS_IFACES];
+    int count = enumerate_local_ipv4(found, MAX_MDNS_IFACES);
+    int added = 0;
+
+    if (count == 0) {
+        /* Enumeration unavailable; fall back to the routing-table guess. */
+        uint32_t fallback = get_local_ip();
+        if (fallback) {
+            found[0] = fallback;
+            count = 1;
+        }
+    }
+
+    MUTEX_LOCK(dnssd->iface_lock);
+    if (dnssd->mdns_sock >= 0) {
+        for (int i = 0; i < count; i++) {
+            if (!iface_listed(dnssd->ifaces, dnssd->iface_count, found[i])) {
+                set_group_membership(dnssd->mdns_sock, found[i], 1);
+                added++;
+            }
+        }
+        for (int i = 0; i < dnssd->iface_count; i++) {
+            if (!iface_listed(found, count, dnssd->ifaces[i])) {
+                set_group_membership(dnssd->mdns_sock, dnssd->ifaces[i], 0);
+            }
+        }
+    }
+    if (count > 0) {
+        memcpy(dnssd->ifaces, found, (size_t)count * sizeof(uint32_t));
+    }
+    dnssd->iface_count = count;
+    MUTEX_UNLOCK(dnssd->iface_lock);
+
+    return added;
+}
+
 /** Create and bind the mDNS multicast socket. */
-static int create_mdns_socket(uint32_t local_ip)
+static int create_mdns_socket(void)
 {
     int sock = (int)socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) return -1;
@@ -508,19 +645,7 @@ static int create_mdns_socket(uint32_t local_ip)
         return -1;
     }
 
-    /* Join the mDNS multicast group on the correct interface */
-    struct ip_mreq mreq;
-    mreq.imr_multiaddr.s_addr = inet_addr(MDNS_ADDR);
-    mreq.imr_interface.s_addr = local_ip;
-    if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP,
-                   (const char *)&mreq, sizeof(mreq)) < 0) {
-        CLOSESOCKET(sock);
-        return -1;
-    }
-
-    /* Set outgoing multicast interface */
-    setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF,
-               (const char *)&local_ip, sizeof(local_ip));
+    /* Group membership is per interface and set up by refresh_interfaces(). */
 
     /* Set TTL to 255 (required by mDNS spec) */
     int ttl = 255;
@@ -543,6 +668,33 @@ static void mdns_send(int sock, const uint8_t *pkt, int pkt_len)
     dest.sin_addr.s_addr = inet_addr(MDNS_ADDR);
     sendto(sock, (const char *)pkt, pkt_len, 0,
            (struct sockaddr *)&dest, sizeof(dest));
+}
+
+/**
+ * Send a response on every advertised interface, each carrying that
+ * interface's own A record.
+ *
+ * iface_lock is held for the whole loop: IP_MULTICAST_IF is socket-wide state,
+ * so a concurrent send from another thread would otherwise be able to redirect
+ * a packet to the wrong link between the setsockopt and the sendto.
+ */
+static void mdns_respond(dnssd_t *dnssd, mdns_service_t *svc,
+                         txt_record_t *txt_rec, int query_type,
+                         int ttl_override)
+{
+    uint8_t pkt[MDNS_BUF_SIZE];
+
+    MUTEX_LOCK(dnssd->iface_lock);
+    for (int i = 0; i < dnssd->iface_count; i++) {
+        int len = build_mdns_response(dnssd, svc, txt_rec, query_type,
+                                      pkt, sizeof(pkt), ttl_override,
+                                      dnssd->ifaces[i]);
+        if (len <= 0) continue;
+        setsockopt(dnssd->mdns_sock, IPPROTO_IP, IP_MULTICAST_IF,
+                   (const char *)&dnssd->ifaces[i], sizeof(uint32_t));
+        mdns_send(dnssd->mdns_sock, pkt, len);
+    }
+    MUTEX_UNLOCK(dnssd->iface_lock);
 }
 
 /* ------------------------------------------------------------------ */
@@ -659,12 +811,7 @@ static void process_mdns_packet(dnssd_t *dnssd, const uint8_t *pkt, int pkt_len)
         MUTEX_LOCK(dnssd->lock);
         int resp_type = match_query(dnssd, qname, qtype, &svc, &txt);
         if (resp_type > 0 && svc && txt) {
-            uint8_t resp[MDNS_BUF_SIZE];
-            int resp_len = build_mdns_response(dnssd, svc, txt, resp_type,
-                                               resp, sizeof(resp), 0);
-            if (resp_len > 0) {
-                mdns_send(dnssd->mdns_sock, resp, resp_len);
-            }
+            mdns_respond(dnssd, svc, txt, resp_type, TTL_USE_DEFAULT);
         }
         MUTEX_UNLOCK(dnssd->lock);
     }
@@ -674,10 +821,45 @@ static void process_mdns_packet(dnssd_t *dnssd, const uint8_t *pkt, int pkt_len)
 /*  mDNS responder thread                                              */
 /* ------------------------------------------------------------------ */
 
+/** Send announcement packets for a service. */
+static void announce_service(dnssd_t *dnssd, mdns_service_t *svc, txt_record_t *txt)
+{
+    for (int i = 0; i < ANNOUNCE_COUNT; i++) {
+        mdns_respond(dnssd, svc, txt, DNS_TYPE_PTR, TTL_USE_DEFAULT);
+        if (i < ANNOUNCE_COUNT - 1) {
+            sleepms(ANNOUNCE_INTERVAL_MS);
+        }
+    }
+}
+
+/** Send goodbye packet for a service, TTL 0, so clients flush the records. */
+static void goodbye_service(dnssd_t *dnssd, mdns_service_t *svc, txt_record_t *txt)
+{
+    mdns_respond(dnssd, svc, txt, DNS_TYPE_PTR, 0);
+}
+
+/** Re-announce every active service, e.g. after a new interface appears. */
+static void announce_active_services(dnssd_t *dnssd)
+{
+    MUTEX_LOCK(dnssd->lock);
+    int raop_active = dnssd->raop_service.active;
+    int airplay_active = dnssd->airplay_service.active;
+    if (raop_active) {
+        mdns_respond(dnssd, &dnssd->raop_service, &dnssd->raop_record,
+                     DNS_TYPE_PTR, TTL_USE_DEFAULT);
+    }
+    if (airplay_active) {
+        mdns_respond(dnssd, &dnssd->airplay_service, &dnssd->airplay_record,
+                     DNS_TYPE_PTR, TTL_USE_DEFAULT);
+    }
+    MUTEX_UNLOCK(dnssd->lock);
+}
+
 static THREAD_RETVAL mdns_thread_func(void *arg)
 {
     dnssd_t *dnssd = (dnssd_t *)arg;
     uint8_t buf[MDNS_BUF_SIZE];
+    int seconds_since_refresh = 0;
 
     while (dnssd->mdns_running) {
         fd_set fds;
@@ -689,6 +871,16 @@ static THREAD_RETVAL mdns_thread_func(void *arg)
         FD_SET((unsigned int)dnssd->mdns_sock, &fds);
 
         int ret = select(dnssd->mdns_sock + 1, &fds, NULL, NULL, &tv);
+
+        if (++seconds_since_refresh >= IFACE_REFRESH_INTERVAL_S) {
+            seconds_since_refresh = 0;
+            /* Announce on links that just came up, so clients there do not
+             * have to wait for their next query to find the receiver. */
+            if (refresh_interfaces(dnssd) > 0) {
+                announce_active_services(dnssd);
+            }
+        }
+
         if (ret <= 0) continue;
 
         struct sockaddr_in from;
@@ -703,42 +895,10 @@ static THREAD_RETVAL mdns_thread_func(void *arg)
     return NULL;
 }
 
-/** Send announcement packets for a service. */
-static void announce_service(dnssd_t *dnssd, mdns_service_t *svc, txt_record_t *txt)
-{
-    uint8_t pkt[MDNS_BUF_SIZE];
-
-    for (int i = 0; i < ANNOUNCE_COUNT; i++) {
-        int len = build_announcement(dnssd, svc, txt, pkt, sizeof(pkt), 0);
-        if (len > 0) {
-            mdns_send(dnssd->mdns_sock, pkt, len);
-        }
-        if (i < ANNOUNCE_COUNT - 1) {
-            sleepms(ANNOUNCE_INTERVAL_MS);
-        }
-    }
-}
-
-/** Send goodbye packet for a service (TTL=0). */
-static void goodbye_service(dnssd_t *dnssd, mdns_service_t *svc, txt_record_t *txt)
-{
-    uint8_t pkt[MDNS_BUF_SIZE];
-    int len = build_goodbye(dnssd, svc, txt, pkt, sizeof(pkt));
-    if (len > 0) {
-        mdns_send(dnssd->mdns_sock, pkt, len);
-    }
-}
-
 /** Start the mDNS responder thread (called on first service registration). */
 static int start_mdns_responder(dnssd_t *dnssd)
 {
     if (dnssd->mdns_running) return 0;
-
-    dnssd->local_ip = get_local_ip();
-    if (dnssd->local_ip == 0) {
-        fprintf(stderr, "embedded mDNS: failed to detect local IP address\n");
-        return -1;
-    }
 
     /* Build a hostname from the service name */
     snprintf(dnssd->hostname, sizeof(dnssd->hostname), "%s", dnssd->name);
@@ -748,9 +908,16 @@ static int start_mdns_responder(dnssd_t *dnssd)
             *p = '-';
     }
 
-    dnssd->mdns_sock = create_mdns_socket(dnssd->local_ip);
+    dnssd->mdns_sock = create_mdns_socket();
     if (dnssd->mdns_sock < 0) {
         fprintf(stderr, "embedded mDNS: failed to create multicast socket\n");
+        return -1;
+    }
+
+    if (refresh_interfaces(dnssd) == 0) {
+        fprintf(stderr, "embedded mDNS: no usable IPv4 interface found\n");
+        CLOSESOCKET(dnssd->mdns_sock);
+        dnssd->mdns_sock = -1;
         return -1;
     }
 
@@ -764,10 +931,15 @@ static int start_mdns_responder(dnssd_t *dnssd)
         return -1;
     }
 
-    struct in_addr addr;
-    addr.s_addr = dnssd->local_ip;
-    fprintf(stdout, "embedded mDNS: responder started on %s (hostname: %s.local)\n",
-            inet_ntoa(addr), dnssd->hostname);
+    fprintf(stdout, "embedded mDNS: responder started (hostname: %s.local)\n",
+            dnssd->hostname);
+    MUTEX_LOCK(dnssd->iface_lock);
+    for (int i = 0; i < dnssd->iface_count; i++) {
+        struct in_addr addr;
+        addr.s_addr = dnssd->ifaces[i];
+        fprintf(stdout, "embedded mDNS: advertising on %s\n", inet_ntoa(addr));
+    }
+    MUTEX_UNLOCK(dnssd->iface_lock);
 
     return 0;
 }
@@ -780,16 +952,16 @@ static void stop_mdns_responder(dnssd_t *dnssd)
     dnssd->mdns_running = 0;
     THREAD_JOIN(dnssd->mdns_thread);
 
+    MUTEX_LOCK(dnssd->iface_lock);
     if (dnssd->mdns_sock >= 0) {
-        /* Leave multicast group */
-        struct ip_mreq mreq;
-        mreq.imr_multiaddr.s_addr = inet_addr(MDNS_ADDR);
-        mreq.imr_interface.s_addr = dnssd->local_ip;
-        setsockopt(dnssd->mdns_sock, IPPROTO_IP, IP_DROP_MEMBERSHIP,
-                   (const char *)&mreq, sizeof(mreq));
+        for (int i = 0; i < dnssd->iface_count; i++) {
+            set_group_membership(dnssd->mdns_sock, dnssd->ifaces[i], 0);
+        }
         CLOSESOCKET(dnssd->mdns_sock);
         dnssd->mdns_sock = -1;
     }
+    dnssd->iface_count = 0;
+    MUTEX_UNLOCK(dnssd->iface_lock);
 }
 
 /* ================================================================== */
@@ -858,7 +1030,9 @@ dnssd_init(const char *name, int name_len, const char *hw_addr,
     dnssd->mdns_sock = -1;
     dnssd->mdns_running = 0;
     dnssd->mdns_thread = 0;
+    dnssd->iface_count = 0;
     MUTEX_CREATE(dnssd->lock);
+    MUTEX_CREATE(dnssd->iface_lock);
 
     return dnssd;
 }
@@ -871,6 +1045,7 @@ dnssd_destroy(dnssd_t *dnssd)
         txt_record_deallocate(&dnssd->raop_record);
         txt_record_deallocate(&dnssd->airplay_record);
         MUTEX_DESTROY(dnssd->lock);
+        MUTEX_DESTROY(dnssd->iface_lock);
         free(dnssd->name);
         free(dnssd->hw_addr);
         free(dnssd);
