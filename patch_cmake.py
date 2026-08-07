@@ -193,7 +193,8 @@ if 'arg == "-no-progress"' not in uxplay_content:
 # burst-draining them into GStreamer. Anchor the clock to the first real ALAC
 # payload and let the existing resend/reorder buffer drain at packet cadence.
 # This is a narrowed backport of FDH2/UxPlay PR #548: malformed short packets
-# are excluded explicitly, and the resampler change is evaluated separately.
+# are excluded explicitly. The resampler change is evaluated separately below
+# and included after that evaluation showed a small absolute runtime cost.
 if "Reset the stream-local clock mapping" not in uxplay_content:
     old_clock_reset = "    audio_type = type;\n    \n    if (use_audio) {\n"
     new_clock_reset = """    audio_type = type;
