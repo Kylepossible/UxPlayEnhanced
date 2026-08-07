@@ -55,6 +55,13 @@ The installer does not delete the extracted release folder; its setup files are
 intentionally not copied into Program Files. After a successful installation,
 the extracted folder can be deleted manually.
 
+During an upgrade, setup stops every running executable from the installed
+package and waits until the installation stays process-free. Releases use a
+versioned application directory so antivirus behavior monitoring cannot strand
+an upgrade by protecting an older executable. Hash-identical runtime files are
+retained instead of being overwritten, while copied files receive SHA-256
+verification.
+
 ### Portable Use
 
 Installation is optional. Extract the ZIP and run `setup-firewall.ps1` once; it
