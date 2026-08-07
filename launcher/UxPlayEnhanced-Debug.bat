@@ -6,7 +6,7 @@ set PATH=%~dp0;%PATH%
 
 echo Starting UxPlayEnhanced in debug mode...
 echo Connect from your iPhone/iPad, let it play, then close this window when done.
-echo The log will be saved to debug.log in this folder.
+echo The log will be saved under %%LOCALAPPDATA%%\UxPlayEnhanced\Logs.
 echo.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0UxPlayEnhanced-Debug.ps1"
 pause
