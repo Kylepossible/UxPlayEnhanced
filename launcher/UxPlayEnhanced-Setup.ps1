@@ -107,7 +107,7 @@ function Copy-PackageFile {
     }
 }
 
-$version = "1.0.3"
+$version = "1.1.0-beta.1"
 $sourceDir = Split-Path -Parent $PSCommandPath
 $productRoot = Join-Path $env:ProgramFiles "UxPlayEnhanced"
 $installDir = Join-Path $productRoot "app-$version"
