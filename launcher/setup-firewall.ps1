@@ -32,5 +32,5 @@ New-NetFirewallRule -DisplayName "UxPlayEnhanced AirPlay (UDP)" `
 
 Write-Host ""
 Write-Host "Firewall rules created successfully!" -ForegroundColor Green
-Write-Host "You can now run UxPlay and connect from your Apple device." -ForegroundColor Cyan
+Write-Host "You can now run UxPlayEnhanced and connect from your Apple device." -ForegroundColor Cyan
 Start-Sleep -Seconds 3

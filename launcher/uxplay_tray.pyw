@@ -164,7 +164,7 @@ def start_uxplay():
     os.makedirs(SCRIPT_DIR, exist_ok=True)
     log_file = open(LOG_PATH, "a", encoding="utf-8", errors="replace", buffering=1)
     log_file.write(
-        "\n=== UxPlay tray session "
+        "\n=== UxPlayEnhanced tray session "
         + datetime.datetime.now().astimezone().isoformat(timespec="seconds")
         + " ===\n"
     )
