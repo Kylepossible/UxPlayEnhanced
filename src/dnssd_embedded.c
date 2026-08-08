@@ -18,6 +18,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
+#include <time.h>
 
 #include "compat.h"
 #include "dnssd.h"
@@ -541,6 +542,8 @@ static uint32_t get_local_ip(void)
  * wrong link, a VPN could hide the LAN, and a machine with no default route
  * got nothing at all. Returns the number of addresses written.
  */
+static int iface_listed(const uint32_t *list, int count, uint32_t ip);
+
 static int enumerate_local_ipv4(uint32_t *out, int max_count)
 {
     int count = 0;
@@ -574,6 +577,7 @@ static int enumerate_local_ipv4(uint32_t *out, int max_count)
          adapter && count < max_count; adapter = adapter->Next) {
         if (adapter->OperStatus != IfOperStatusUp) continue;
         if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+        if (adapter->Flags & IP_ADAPTER_NO_MULTICAST) continue;
         for (IP_ADAPTER_UNICAST_ADDRESS *unicast = adapter->FirstUnicastAddress;
              unicast && count < max_count; unicast = unicast->Next) {
             if (!unicast->Address.lpSockaddr ||
@@ -581,6 +585,7 @@ static int enumerate_local_ipv4(uint32_t *out, int max_count)
             uint32_t ip =
                 ((struct sockaddr_in *)unicast->Address.lpSockaddr)->sin_addr.s_addr;
             if (ip == 0 || (ntohl(ip) >> 24) == 127) continue;
+            if (iface_listed(out, count, ip)) continue;
             out[count++] = ip;
         }
     }
@@ -593,8 +598,10 @@ static int enumerate_local_ipv4(uint32_t *out, int max_count)
         if (!entry->ifa_addr || entry->ifa_addr->sa_family != AF_INET) continue;
         if (!(entry->ifa_flags & IFF_UP)) continue;
         if (entry->ifa_flags & IFF_LOOPBACK) continue;
+        if (!(entry->ifa_flags & IFF_MULTICAST)) continue;
         uint32_t ip = ((struct sockaddr_in *)entry->ifa_addr)->sin_addr.s_addr;
         if (ip == 0) continue;
+        if (iface_listed(out, count, ip)) continue;
         out[count++] = ip;
     }
     freeifaddrs(list);
@@ -612,13 +619,14 @@ static int iface_listed(const uint32_t *list, int count, uint32_t ip)
 }
 
 /** Join or leave the mDNS multicast group on one interface. */
-static void set_group_membership(int sock, uint32_t iface_ip, int join)
+static int set_group_membership(int sock, uint32_t iface_ip, int join)
 {
     struct ip_mreq mreq;
     mreq.imr_multiaddr.s_addr = inet_addr(MDNS_ADDR);
     mreq.imr_interface.s_addr = iface_ip;
-    setsockopt(sock, IPPROTO_IP, join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP,
-               (const char *)&mreq, sizeof(mreq));
+    return setsockopt(sock, IPPROTO_IP,
+                      join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP,
+                      (const char *)&mreq, sizeof(mreq));
 }
 
 /**
@@ -629,7 +637,9 @@ static void set_group_membership(int sock, uint32_t iface_ip, int join)
 static int refresh_interfaces(dnssd_t *dnssd)
 {
     uint32_t found[MAX_MDNS_IFACES];
+    uint32_t usable[MAX_MDNS_IFACES];
     int count = enumerate_local_ipv4(found, MAX_MDNS_IFACES);
+    int usable_count = 0;
     int added = 0;
 
     if (count == 0) {
@@ -642,23 +652,33 @@ static int refresh_interfaces(dnssd_t *dnssd)
     }
 
     MUTEX_LOCK(dnssd->iface_lock);
-    if (dnssd->mdns_sock >= 0) {
-        for (int i = 0; i < count; i++) {
-            if (!iface_listed(dnssd->ifaces, dnssd->iface_count, found[i])) {
-                set_group_membership(dnssd->mdns_sock, found[i], 1);
+    for (int i = 0; i < count; i++) {
+        if (iface_listed(dnssd->ifaces, dnssd->iface_count, found[i])) {
+            usable[usable_count++] = found[i];
+        } else if (dnssd->mdns_sock >= 0) {
+            if (set_group_membership(dnssd->mdns_sock, found[i], 1) == 0) {
+                usable[usable_count++] = found[i];
                 added++;
+            } else {
+                struct in_addr addr;
+                addr.s_addr = found[i];
+                fprintf(stderr, "embedded mDNS: cannot join multicast on %s\n",
+                        inet_ntoa(addr));
             }
         }
+    }
+    if (dnssd->mdns_sock >= 0) {
         for (int i = 0; i < dnssd->iface_count; i++) {
-            if (!iface_listed(found, count, dnssd->ifaces[i])) {
+            if (!iface_listed(usable, usable_count, dnssd->ifaces[i])) {
                 set_group_membership(dnssd->mdns_sock, dnssd->ifaces[i], 0);
             }
         }
     }
-    if (count > 0) {
-        memcpy(dnssd->ifaces, found, (size_t)count * sizeof(uint32_t));
+    if (usable_count > 0) {
+        memcpy(dnssd->ifaces, usable,
+               (size_t)usable_count * sizeof(uint32_t));
     }
-    dnssd->iface_count = count;
+    dnssd->iface_count = usable_count;
     MUTEX_UNLOCK(dnssd->iface_lock);
 
     return added;
@@ -900,7 +920,7 @@ static THREAD_RETVAL mdns_thread_func(void *arg)
 {
     dnssd_t *dnssd = (dnssd_t *)arg;
     uint8_t buf[MDNS_BUF_SIZE];
-    int seconds_since_refresh = 0;
+    time_t last_iface_refresh = time(NULL);
 
     while (dnssd->mdns_running) {
         fd_set fds;
@@ -913,8 +933,10 @@ static THREAD_RETVAL mdns_thread_func(void *arg)
 
         int ret = select(dnssd->mdns_sock + 1, &fds, NULL, NULL, &tv);
 
-        if (++seconds_since_refresh >= IFACE_REFRESH_INTERVAL_S) {
-            seconds_since_refresh = 0;
+        time_t now = time(NULL);
+        if (now < last_iface_refresh ||
+            difftime(now, last_iface_refresh) >= IFACE_REFRESH_INTERVAL_S) {
+            last_iface_refresh = now;
             /* Announce on links that just came up, so clients there do not
              * have to wait for their next query to find the receiver. */
             if (refresh_interfaces(dnssd) > 0) {

@@ -59,6 +59,7 @@ mkdir -p "$DIST_DIR/lib/gstreamer-1.0"
 
 # Copy executable
 cp "$BUILD_DIR/uxplay.exe" "$DIST_DIR/"
+cp "$SCRIPT_DIR/README.md" "$SCRIPT_DIR/LICENSE" "$DIST_DIR/"
 
 # Copy all required DLLs (resolve transitive deps)
 copy_deps() {

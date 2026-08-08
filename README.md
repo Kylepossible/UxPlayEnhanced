@@ -62,6 +62,12 @@ an upgrade by protecting an older executable. Hash-identical runtime files are
 retained instead of being overwritten, while copied files receive SHA-256
 verification.
 
+Uninstall from Windows **Apps and Features**. The uninstaller verifies the
+registered Program Files path before recursive removal. If antivirus behavior
+monitoring keeps an old runtime file protected, uninstall schedules only the
+remaining UxPlayEnhanced files for deletion at the next Windows restart and
+reports that a restart is required.
+
 ### Portable Use
 
 Installation is optional. Extract the ZIP and run `setup-firewall.ps1` once; it
