@@ -62,6 +62,12 @@ an upgrade by protecting an older executable. Hash-identical runtime files are
 retained instead of being overwritten, while copied files receive SHA-256
 verification.
 
+Uninstall from Windows **Apps and Features**. The uninstaller verifies the
+registered Program Files path before recursive removal. If antivirus behavior
+monitoring keeps an old runtime file protected, uninstall schedules only the
+remaining UxPlayEnhanced files for deletion at the next Windows restart and
+reports that a restart is required.
+
 ### Portable Use
 
 Installation is optional. Extract the ZIP and run `setup-firewall.ps1` once; it
@@ -83,7 +89,9 @@ Right-click its blue tray icon to see:
 Logs are stored at
 `%LOCALAPPDATA%\UxPlayEnhanced\Logs\UxPlayEnhanced.log`. **View logs** opens
 that file directly in Notepad, without relying on a Windows `.log` file
-association.
+association. The log rotates at 5 MB and keeps two older files
+(`UxPlayEnhanced.log.1` and `.log.2`), so a long-running receiver cannot fill
+the disk.
 
 Normal logs omit the once-per-second track progress display. Launch
 `UxPlayEnhanced.exe --verbose` when troubleshooting to include those progress
@@ -144,6 +152,14 @@ embedded responder in `src/dnssd_embedded.c`. It:
 - Sends startup announcements and TTL=0 goodbye records
 - Runs in-process without `dnssd.dll`, iTunes, iCloud, or Bonjour services
 
+Discovery is advertised on every up, non-loopback IPv4 interface rather than
+only the one that routes toward the internet, so a PC on both Ethernet and
+Wi-Fi is reachable from either network and a machine with no default route
+still works. Each interface advertises its own address. The interface list is
+rechecked every 15 seconds, so joining Wi-Fi, docking, or raising a VPN is
+picked up without a restart, and services are re-announced on links that
+appear.
+
 ## Build from Source
 
 Clone this repository with its official UxPlay submodule:
@@ -189,11 +205,35 @@ The self-contained package is written to `dist/UxPlayEnhanced/`.
 - `assets/` — application and tray icon assets
 - `build.sh` — builds UxPlay, resolves DLL dependencies, and packages the release
 
-## License and Attribution
+## License
 
-UxPlayEnhanced uses [FDH2/UxPlay](https://github.com/FDH2/UxPlay) as its core
-AirPlay implementation. UxPlay is licensed under LGPL-2.1. See [LICENSE](LICENSE)
-and [lib/uxplay/LICENSE](lib/uxplay/LICENSE).
+UxPlayEnhanced is distributed under the **GNU General Public License v3.0**. See
+[LICENSE](LICENSE).
+
+UxPlayEnhanced builds on [FDH2/UxPlay](https://github.com/FDH2/UxPlay), which is
+licensed under GPL-3.0, and every release ships a patched `uxplay.exe`. A
+modified GPLv3 work must itself be distributed under GPLv3, so that license
+covers this repository and all binary releases.
+
+Per-component notes:
+
+| Component | License |
+|---|---|
+| `lib/uxplay/` (submodule) | GPL-3.0 — see [lib/uxplay/LICENSE](lib/uxplay/LICENSE) |
+| `lib/uxplay/lib/` (upstream AirPlay library, derived from RPiPlay/shairplay) | LGPL-2.1-or-later |
+| `src/dnssd_embedded.c` | LGPL-2.1-or-later, matching the upstream `lib/dnssd.c` it replaces |
+| `patch_cmake.py`, `build.sh`, `launcher/` | GPL-3.0 |
+
+`src/dnssd_embedded.c` stays under LGPL-2.1-or-later so it remains usable in the
+same places upstream's `lib/dnssd.c` is; the "or later" grant makes it
+compatible with the GPL-3.0 work it links into.
+
+The complete corresponding source for a binary release is this repository at the
+matching tag, together with the `lib/uxplay` submodule commit it pins.
+
+## Attribution
+
+Core AirPlay implementation: [FDH2/UxPlay](https://github.com/FDH2/UxPlay).
 
 Windows packaging was also informed by
 [leapbtw/uxplay-windows](https://github.com/leapbtw/uxplay-windows).
