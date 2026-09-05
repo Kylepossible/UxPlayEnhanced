@@ -6,6 +6,8 @@ running directly from a source checkout.
 """
 
 import datetime
+import ctypes
+from ctypes import wintypes
 import logging
 import logging.handlers
 import os
@@ -14,6 +16,7 @@ import socket
 import subprocess
 import sys
 import threading
+import uuid
 
 from PIL import Image, ImageDraw
 import pystray
@@ -61,8 +64,58 @@ if not VERBOSE_LOGGING:
 
 process = None
 reader_thread = None
+shutdown_signal = None
 state_lock = threading.Lock()
 stop_monitor = threading.Event()
+
+
+class SingleInstance:
+    """Hold a Windows session mutex across all installed/portable copies."""
+
+    def __init__(self, name=r"Local\UxPlayEnhanced.AudioReceiver"):
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        self.kernel32.CreateMutexW.restype = wintypes.HANDLE
+        self.kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.kernel32.CloseHandle.restype = wintypes.BOOL
+        self.handle = self.kernel32.CreateMutexW(None, False, name)
+        error = ctypes.get_last_error()
+        if not self.handle:
+            raise ctypes.WinError(error)
+        self.acquired = error != 183  # ERROR_ALREADY_EXISTS
+        if not self.acquired:
+            self.close()
+
+    def close(self):
+        if self.handle:
+            self.kernel32.CloseHandle(self.handle)
+            self.handle = None
+
+
+class ShutdownSignal:
+    """Ask the hidden receiver to run its normal AirPlay/mDNS cleanup."""
+
+    def __init__(self):
+        self.name = "Local\\UxPlayEnhanced.Stop." + uuid.uuid4().hex
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel32.CreateEventW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+        self.kernel32.CreateEventW.restype = wintypes.HANDLE
+        self.kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+        self.kernel32.SetEvent.restype = wintypes.BOOL
+        self.kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.kernel32.CloseHandle.restype = wintypes.BOOL
+        self.handle = self.kernel32.CreateEventW(None, True, False, self.name)
+        if not self.handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def request(self):
+        if not self.kernel32.SetEvent(self.handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def close(self):
+        if self.handle:
+            self.kernel32.CloseHandle(self.handle)
+            self.handle = None
 
 
 class UxPlayTrayIcon(pystray.Icon):
@@ -181,6 +234,18 @@ def format_quality(line):
 
 def apply_log_line(state, line):
     """Fold one line of UxPlay output into the tray's view of the session."""
+    event = line.strip()
+    if event == "audio session ended":
+        state.update(new_state())
+        return state
+    if event == "audio session started":
+        client = state["client"]
+        state.update(new_state())
+        state["client"] = client
+        state["audio_connected"] = True
+    if event.startswith("====") and "Audio Metadata" in event:
+        for field in ("title", "artist", "album"):
+            state[field] = ""
     match = CLIENT_PATTERN.search(line)
     if match:
         state["client"] = f"{match.group(1).strip()} ({match.group(2).strip()})"[:110]
@@ -198,9 +263,7 @@ def apply_log_line(state, line):
 
     match = METADATA_PATTERN.match(line.strip())
     if match:
-        value = match.group(2).strip()
-        if value:
-            state[match.group(1).lower()] = value
+        state[match.group(1).lower()] = match.group(2).strip()
 
     return state
 
@@ -280,7 +343,7 @@ def quality_text(item=None):
 
 def start_uxplay():
     """Start UxPlay hidden and append its console output to the log."""
-    global process, reader_thread, log_writer, session_state
+    global process, reader_thread, log_writer, session_state, shutdown_signal
 
     stop_uxplay()
 
@@ -295,6 +358,9 @@ def start_uxplay():
     env = os.environ.copy()
     env["GST_PLUGIN_PATH"] = GST_PLUGIN_PATH
     env["PATH"] = SCRIPT_DIR + os.pathsep + env.get("PATH", "")
+    signal = ShutdownSignal()
+    env["UXPLAYENHANCED_STOP_EVENT"] = signal.name
+    env["UXPLAYENHANCED_PARENT_PID"] = str(os.getpid())
 
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -302,19 +368,24 @@ def start_uxplay():
 
     with state_lock:
         session_state = new_state()
-        process = subprocess.Popen(
-            UXPLAY_ARGS,
-            cwd=SCRIPT_DIR,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            startupinfo=startupinfo,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-        )
+        try:
+            process = subprocess.Popen(
+                UXPLAY_ARGS,
+                cwd=SCRIPT_DIR,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+        except BaseException:
+            signal.close()
+            raise
+        shutdown_signal = signal
         started = process
 
     reader_thread = threading.Thread(
@@ -327,21 +398,32 @@ def start_uxplay():
 
 def stop_uxplay():
     """Stop UxPlay and wait for its output reader to drain."""
-    global process, reader_thread
+    global process, reader_thread, shutdown_signal
 
     with state_lock:
         current_process = process
         process = None
     current_reader = reader_thread
     reader_thread = None
+    current_signal = shutdown_signal
+    shutdown_signal = None
 
     if current_process and current_process.poll() is None:
-        current_process.terminate()
         try:
+            if current_signal:
+                current_signal.request()
+            current_process.wait(timeout=10)
+        except OSError:
+            current_process.terminate()
             current_process.wait(timeout=5)
         except subprocess.TimeoutExpired:
+            if log_writer:
+                log_writer.warning("Graceful receiver shutdown timed out; forcing exit.")
             current_process.kill()
             current_process.wait(timeout=5)
+
+    if current_signal:
+        current_signal.close()
 
     if current_reader:
         # The reader ends when the pipe closes, which the exit above guarantees.
@@ -393,6 +475,18 @@ def setup(icon):
 
 
 def main():
+    instance = SingleInstance()
+    if not instance.acquired:
+        return
+    try:
+        run_tray()
+    finally:
+        stop_monitor.set()
+        stop_uxplay()
+        instance.close()
+
+
+def run_tray():
     icon = UxPlayTrayIcon(
         "UxPlayEnhanced",
         create_icon_image(),

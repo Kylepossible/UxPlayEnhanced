@@ -101,6 +101,16 @@ logged.
 The executable bundles its Python runtime and tray dependencies. End users do
 not need Python, `pip`, `pystray`, or Pillow installed.
 
+Only one tray receiver runs per Windows session, including across portable and
+installed copies. Opening it again leaves the existing receiver running. Tray
+status clears when the audio session ends, and each metadata block replaces the
+previous song's fields.
+
+Quit and Restart request normal receiver shutdown, closing AirPlay connections
+and sending mDNS goodbye records. The receiver also watches the tray process
+and shuts down if it disappears, instead of leaving an orphan receiver running.
+A hung receiver is forcibly stopped only after the graceful-shutdown timeout.
+
 ## Audio-Only Behavior
 
 All included launchers pass `-vs 0`, which disables UxPlay's local video sink.
@@ -194,6 +204,21 @@ bash build.sh
 ```
 
 The self-contained package is written to `dist/UxPlayEnhanced/`.
+
+Packaging fails if the tray, required plugins, or runtime DLLs are missing.
+The build uses `pefile` (included with Windows PyInstaller) to inspect normal
+and delayed DLL imports, resolving third-party dependencies from MinGW instead
+of assuming that libraries found on the build PC are available to users.
+
+Run `python -m unittest discover -s tests -v` for tray and package tests.
+`tests/test_installer.ps1 -PackageDir <extracted-package> -ResultPath <results.json>`
+is an elevated Windows PowerShell 5.1 integration test: it deliberately creates
+duplicate legacy rules, runs portable setup twice, installs/repairs v1.1.1 twice,
+and checks installed hashes, the desktop shortcut, and firewall targets. Run it
+only on a Windows machine where installing the test release is intended.
+Setting `UXPLAYENHANCED_TEST_PACKAGE` to a built package directory enables two
+additional receiver tests: normal shutdown with a live control socket and
+captured mDNS goodbye, and cleanup after its parent process is terminated.
 
 ## Project Layout
 

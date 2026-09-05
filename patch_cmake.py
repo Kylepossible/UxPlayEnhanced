@@ -214,6 +214,72 @@ if "Reset the stream-local clock mapping" not in uxplay_content:
         raise RuntimeError("Could not find UxPlay stream clock reset insertion point")
     uxplay_content = uxplay_content.replace(old_clock_reset, new_clock_reset, 1)
 
+# Explicit lifecycle events avoid treating unrelated control sockets as audio
+# disconnects. The start event precedes quality output so a reset retains the
+# format of the newly negotiated stream.
+if 'fflush(stdout); /* Deliver log events to the tray pipe immediately. */' not in uxplay_content:
+    anchor = '    vprintf(format, vargs);\n    printf("\\n");\n    va_end(vargs);'
+    if anchor not in uxplay_content:
+        raise RuntimeError("Could not find log flush insertion point")
+    uxplay_content = uxplay_content.replace(
+        anchor, anchor + '\n    fflush(stdout); /* Deliver log events to the tray pipe immediately. */', 1
+    )
+
+if 'struct TrayShutdownWatch' not in uxplay_content:
+    anchor = '#ifdef _WIN32\nstatic gboolean handle_signal(gpointer data) {'
+    replacement = '''#ifdef _WIN32
+struct TrayShutdownWatch {
+    HANDLE stop_event;
+    HANDLE parent_process;
+};
+
+static gboolean tray_shutdown_callback(gpointer data) {
+    TrayShutdownWatch *watch = (TrayShutdownWatch *) data;
+    if (!watch->stop_event || !watch->parent_process ||
+        WaitForSingleObject(watch->stop_event, 0) == WAIT_OBJECT_0 ||
+        WaitForSingleObject(watch->parent_process, 0) == WAIT_OBJECT_0) {
+        LOGI("Tray requested shutdown or exited; closing AirPlay sessions.");
+        relaunch_video = false;
+        g_main_loop_quit(gmainloop);
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+static gboolean handle_signal(gpointer data) {'''
+    if anchor not in uxplay_content:
+        raise RuntimeError("Could not find Windows shutdown callback insertion point")
+    uxplay_content = uxplay_content.replace(anchor, replacement, 1)
+    anchor = '#ifdef _WIN32\n    gmainloop = loop;'
+    replacement = '''#ifdef _WIN32
+    gmainloop = loop;
+    TrayShutdownWatch tray_watch = {NULL, NULL};
+    guint tray_watch_id = 0;
+    const char *tray_event = getenv("UXPLAYENHANCED_STOP_EVENT");
+    const char *tray_parent = getenv("UXPLAYENHANCED_PARENT_PID");
+    if (tray_event && tray_parent) {
+        tray_watch.stop_event = OpenEventA(SYNCHRONIZE, FALSE, tray_event);
+        tray_watch.parent_process = OpenProcess(SYNCHRONIZE, FALSE, (DWORD) strtoul(tray_parent, NULL, 10));
+        tray_watch_id = g_timeout_add(100, tray_shutdown_callback, &tray_watch);
+    }'''
+    if anchor not in uxplay_content:
+        raise RuntimeError("Could not find Windows shutdown watch insertion point")
+    uxplay_content = uxplay_content.replace(anchor, replacement, 1)
+    anchor = '#ifdef _WIN32\n    gmainloop = NULL;'
+    replacement = '''#ifdef _WIN32
+    if (tray_watch_id) g_source_remove(tray_watch_id);
+    if (tray_watch.stop_event) CloseHandle(tray_watch.stop_event);
+    if (tray_watch.parent_process) CloseHandle(tray_watch.parent_process);
+    gmainloop = NULL;'''
+    if anchor not in uxplay_content:
+        raise RuntimeError("Could not find Windows shutdown watch cleanup insertion point")
+    uxplay_content = uxplay_content.replace(anchor, replacement, 1)
+
+if 'LOGI("audio session started");' not in uxplay_content:
+    anchor = "    log_audio_quality(*ct, *spf, *audioFormat);\n"
+    if anchor not in uxplay_content:
+        raise RuntimeError("Could not find audio session start insertion point")
+    uxplay_content = uxplay_content.replace(anchor, '    LOGI("audio session started");\n' + anchor, 1)
+
 with open(uxplay_path, "w") as f:
     f.write(uxplay_content)
 
@@ -240,6 +306,14 @@ if "Start ALAC playback from the first real audio packet" not in raop_rtp_conten
     if old_alac_enqueue not in raop_rtp_content:
         raise RuntimeError("Could not find UxPlay ALAC enqueue insertion point")
     raop_rtp_content = raop_rtp_content.replace(old_alac_enqueue, new_alac_enqueue, 1)
+
+if 'LOGGER_INFO, "audio session ended"' not in raop_rtp_content:
+    anchor = '    logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp exiting thread");'
+    if anchor not in raop_rtp_content:
+        raise RuntimeError("Could not find audio session end insertion point")
+    raop_rtp_content = raop_rtp_content.replace(
+        anchor, anchor + '\n    logger_log(raop_rtp->logger, LOGGER_INFO, "audio session ended");', 1
+    )
 
 with open(raop_rtp_path, "w") as f:
     f.write(raop_rtp_content)
