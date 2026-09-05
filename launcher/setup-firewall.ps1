@@ -18,6 +18,20 @@ if (-not (Test-IsAdministrator)) {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $exePath = Join-Path $scriptDir "uxplay.exe"
 $firewallGroup = "UxPlayEnhanced"
+$firewallRules = @(
+    [pscustomobject]@{
+        RuleName = "UxPlayEnhanced-AirPlay-TCP"
+        DisplayName = "UxPlayEnhanced AirPlay (TCP)"
+        Protocol = "TCP"
+        Description = "Allow AirPlay connections to UxPlayEnhanced"
+    },
+    [pscustomobject]@{
+        RuleName = "UxPlayEnhanced-AirPlay-UDP"
+        DisplayName = "UxPlayEnhanced AirPlay (UDP)"
+        Protocol = "UDP"
+        Description = "Allow AirPlay UDP streams and mDNS to UxPlayEnhanced"
+    }
+)
 
 if (-not (Test-Path $exePath)) {
     Write-Host "ERROR: uxplay.exe not found at $exePath" -ForegroundColor Red
@@ -33,6 +47,12 @@ Remove-NetFirewallRule -DisplayName "UxPlay AirPlay (TCP)" -ErrorAction Silently
 Remove-NetFirewallRule -DisplayName "UxPlay AirPlay (UDP)" -ErrorAction SilentlyContinue
 Get-NetFirewallRule -Group $firewallGroup -ErrorAction SilentlyContinue |
     Remove-NetFirewallRule -ErrorAction SilentlyContinue
+foreach ($managedRule in $firewallRules) {
+    Get-NetFirewallRule -Name $managedRule.RuleName -ErrorAction SilentlyContinue |
+        Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    Get-NetFirewallRule -DisplayName $managedRule.DisplayName -ErrorAction SilentlyContinue |
+        Remove-NetFirewallRule -ErrorAction SilentlyContinue
+}
 
 # Remove only enabled inbound block rules for this exact executable. Windows
 # block rules take precedence over allow rules.
@@ -40,43 +60,60 @@ $normalizedExePath = [System.IO.Path]::GetFullPath($exePath)
 Get-NetFirewallRule -Direction Inbound -Action Block -Enabled True -ErrorAction SilentlyContinue |
     ForEach-Object {
         $rule = $_
-        $applicationFilter = $rule | Get-NetFirewallApplicationFilter
-        if ($applicationFilter.Program -and $applicationFilter.Program -ne "Any") {
-            $ruleProgram = [System.IO.Path]::GetFullPath(
-                [Environment]::ExpandEnvironmentVariables($applicationFilter.Program)
-            )
-            if ($ruleProgram -ieq $normalizedExePath) {
-                $rule | Remove-NetFirewallRule
+        $removeRule = $false
+        $applicationFilters = @($rule | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue)
+        foreach ($applicationFilter in $applicationFilters) {
+            $program = [string]$applicationFilter.Program
+            if ($program -and $program -ne "Any") {
+                try {
+                    $ruleProgram = [System.IO.Path]::GetFullPath(
+                        [Environment]::ExpandEnvironmentVariables($program)
+                    )
+                    if ($ruleProgram -ieq $normalizedExePath) {
+                        $removeRule = $true
+                        break
+                    }
+                } catch {
+                    # Ignore non-file application filters from unrelated rules.
+                }
             }
+        }
+        if ($removeRule) {
+            $rule | Remove-NetFirewallRule
         }
     }
 
-# Allow inbound TCP (AirPlay control + mirroring)
-New-NetFirewallRule -DisplayName "UxPlayEnhanced AirPlay (TCP)" `
-    -Group $firewallGroup -Direction Inbound -Action Allow -Protocol TCP `
-    -Program $exePath -Profile Private,Public -Enabled True `
-    -Description "Allow AirPlay connections to UxPlay" | Out-Null
+foreach ($managedRule in $firewallRules) {
+    New-NetFirewallRule -Name $managedRule.RuleName `
+        -DisplayName $managedRule.DisplayName -Group $firewallGroup `
+        -Direction Inbound -Action Allow -Protocol $managedRule.Protocol `
+        -Program $exePath -Profile Private,Public -Enabled True `
+        -Description $managedRule.Description | Out-Null
+}
 
-# Allow inbound UDP (mDNS discovery + RTP audio/video streams)
-New-NetFirewallRule -DisplayName "UxPlayEnhanced AirPlay (UDP)" `
-    -Group $firewallGroup -Direction Inbound -Action Allow -Protocol UDP `
-    -Program $exePath -Profile Private,Public -Enabled True `
-    -Description "Allow AirPlay UDP streams and mDNS to UxPlay" | Out-Null
-
-foreach ($expected in @(
-    @{ Name = "UxPlayEnhanced AirPlay (TCP)"; Protocol = "TCP" },
-    @{ Name = "UxPlayEnhanced AirPlay (UDP)"; Protocol = "UDP" }
-)) {
-    $rule = Get-NetFirewallRule -DisplayName $expected.Name -ErrorAction Stop
-    $applicationFilter = $rule | Get-NetFirewallApplicationFilter
-    $portFilter = $rule | Get-NetFirewallPortFilter
+foreach ($expected in $firewallRules) {
+    $matchingRules = @(Get-NetFirewallRule -Name $expected.RuleName -ErrorAction Stop)
+    if ($matchingRules.Count -ne 1) {
+        throw "Firewall verification expected one rule named $($expected.RuleName), found $($matchingRules.Count)."
+    }
+    $rule = $matchingRules[0]
+    $applicationFilters = @($rule | Get-NetFirewallApplicationFilter)
+    $portFilters = @($rule | Get-NetFirewallPortFilter)
+    if ($applicationFilters.Count -ne 1 -or $portFilters.Count -ne 1) {
+        throw "Firewall verification found unexpected filters for $($expected.DisplayName)."
+    }
+    $program = $applicationFilters[0].Program
+    if ($program -is [array] -or [string]::IsNullOrWhiteSpace([string]$program)) {
+        throw "Firewall verification found an invalid program for $($expected.DisplayName)."
+    }
     $ruleProgram = [System.IO.Path]::GetFullPath(
-        [Environment]::ExpandEnvironmentVariables($applicationFilter.Program)
+        [Environment]::ExpandEnvironmentVariables([string]$program)
     )
-    if ($rule.Enabled -ne "True" -or $rule.Direction -ne "Inbound" -or
+    if ($rule.DisplayName -ne $expected.DisplayName -or
+        $rule.Enabled -ne "True" -or $rule.Direction -ne "Inbound" -or
         $rule.Action -ne "Allow" -or $ruleProgram -ine $normalizedExePath -or
-        $portFilter.Protocol -ne $expected.Protocol) {
-        throw "Firewall verification failed for $($expected.Name)."
+        $portFilters[0].Protocol -ne $expected.Protocol) {
+        throw "Firewall verification failed for $($expected.DisplayName)."
     }
 }
 

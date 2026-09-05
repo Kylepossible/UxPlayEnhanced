@@ -61,36 +61,17 @@ mkdir -p "$DIST_DIR/lib/gstreamer-1.0"
 cp "$BUILD_DIR/uxplay.exe" "$DIST_DIR/"
 cp "$SCRIPT_DIR/README.md" "$SCRIPT_DIR/LICENSE" "$DIST_DIR/"
 
-# Copy all required DLLs (resolve transitive deps)
-copy_deps() {
-    local changed=1
-    while [ $changed -ne 0 ]; do
-        changed=0
-        for f in "$DIST_DIR"/*.dll "$DIST_DIR"/lib/gstreamer-1.0/*.dll "$DIST_DIR"/uxplay.exe; do
-            [ -f "$f" ] || continue
-            for dll in $(ldd "$f" 2>/dev/null | grep mingw64 | awk '{print $3}'); do
-                base=$(basename "$dll")
-                if [ ! -f "$DIST_DIR/$base" ]; then
-                    cp "$dll" "$DIST_DIR/"
-                    changed=1
-                fi
-            done
-        done
-    done
-}
-
 # Copy GStreamer runtime libs
 for lib in libgstvideo-1.0-0 libgstsdp-1.0-0 libgstpbutils-1.0-0 \
            libgstaudio-1.0-0 libgsttag-1.0-0 libgstrtp-1.0-0 \
            libgstgl-1.0-0 libgstcodecparsers-1.0-0 liborc-0.4-0; do
-    cp /mingw64/bin/${lib}.dll "$DIST_DIR/" 2>/dev/null || true
+    cp /mingw64/bin/${lib}.dll "$DIST_DIR/"
 done
 
 # FFmpeg's avcodec can import xvidcore.dll. On the build PC, ldd may resolve
 # it from Windows/System32, so copy the MinGW runtime explicitly for portable
 # installs on machines without that system DLL.
-cp /mingw64/bin/xvidcore.dll "$DIST_DIR/" 2>/dev/null || \
-    echo "WARNING: /mingw64/bin/xvidcore.dll was not found; avcodec may not load on another PC"
+cp /mingw64/bin/xvidcore.dll "$DIST_DIR/"
 
 # Copy GStreamer plugins
 for plugin in libgstcoreelements libgstplayback libgstvideoconvertscale \
@@ -102,11 +83,8 @@ for plugin in libgstcoreelements libgstplayback libgstvideoconvertscale \
               libgstd3d11 libgstwasapi2 libgstd3d12 \
               libgstdirectsound libgstwasapi \
               libgstalaw libgstmulaw libgstsubparse libgstencoding; do
-    cp /mingw64/lib/gstreamer-1.0/${plugin}.dll "$DIST_DIR/lib/gstreamer-1.0/" 2>/dev/null || true
+    cp /mingw64/lib/gstreamer-1.0/${plugin}.dll "$DIST_DIR/lib/gstreamer-1.0/"
 done
-
-# Resolve all transitive DLL dependencies
-copy_deps
 
 # Build the standalone tray launcher. This uses the regular Windows Python
 # installation, not MSYS2's build Python. The resulting executable bundles
@@ -129,7 +107,8 @@ if [ -n "$TRAY_PYTHON" ] && "$TRAY_PYTHON" -m PyInstaller --version >/dev/null 2
         "$SCRIPT_DIR/launcher/uxplay_tray.pyw"
     cp "$BUILD_DIR/tray-dist/UxPlayEnhanced.exe" "$DIST_DIR/"
 else
-    echo "WARNING: Windows Python with PyInstaller was not found; UxPlayEnhanced.exe was not built"
+    echo "ERROR: Windows Python with PyInstaller is required to build UxPlayEnhanced.exe"
+    exit 1
 fi
 
 # Copy launcher files, skipping source-checkout cache directories.
@@ -137,6 +116,11 @@ for launcher_file in "$SCRIPT_DIR"/launcher/*; do
     [ -f "$launcher_file" ] || continue
     cp "$launcher_file" "$DIST_DIR/"
 done
+
+# Resolve the complete import graph directly from the selected MinGW runtime;
+# do not let ldd resolve third-party libraries from this PC's System32 or PATH.
+"$TRAY_PYTHON" "$SCRIPT_DIR/scripts/verify_package.py" "$(cygpath -w "$DIST_DIR")" \
+    --runtime-dir "$(cygpath -w /mingw64/bin)"
 
 echo ""
 echo "=== Build complete ==="
